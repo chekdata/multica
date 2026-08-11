@@ -93,6 +93,7 @@ jobs:
   # arm64 build run for 30+ minutes per release.
   docker-backend-build:
     needs: verify
+    if: github.repository_owner == 'multica-ai'
     strategy:
       fail-fast: false
       matrix:
@@ -162,6 +163,7 @@ jobs:
 
   docker-backend-merge:
     needs: [verify, docker-backend-build]
+    if: github.repository_owner == 'multica-ai'
     runs-on: ubuntu-latest
     concurrency:
       group: release-docker-backend-${{ github.ref }}
@@ -210,6 +212,7 @@ jobs:
 
   docker-web-build:
     needs: verify
+    if: github.repository_owner == 'multica-ai'
     strategy:
       fail-fast: false
       matrix:
@@ -279,6 +282,7 @@ jobs:
 
   docker-web-merge:
     needs: [verify, docker-web-build]
+    if: github.repository_owner == 'multica-ai'
     runs-on: ubuntu-latest
     concurrency:
       group: release-docker-web-${{ github.ref }}
