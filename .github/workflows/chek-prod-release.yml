@@ -1,0 +1,205 @@
+name: CHEK Prod Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+      - "!v*-dirty*"
+  workflow_dispatch:
+    inputs:
+      source_repository:
+        description: "Source repository to build from"
+        required: true
+        default: "multica-ai/multica"
+        type: string
+      source_ref:
+        description: "Git ref to build from (tag, branch, or SHA)"
+        required: true
+        default: "v0.4.3"
+        type: string
+      image_tag:
+        description: "Image tag to publish"
+        required: true
+        default: "v0.4.3"
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: chek-prod-release-${{ github.event_name == 'workflow_dispatch' && inputs.image_tag || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  BACKEND_IMAGE: ghcr.io/chekdata/multica-backend
+  WEB_IMAGE: ghcr.io/chekdata/multica-web
+
+jobs:
+  build-and-open-gitops-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      source_repository: ${{ steps.vars.outputs.source_repository }}
+      source_ref: ${{ steps.vars.outputs.source_ref }}
+      image_tag: ${{ steps.vars.outputs.image_tag }}
+      source_commit: ${{ steps.source_meta.outputs.commit }}
+    steps:
+      - name: Resolve release inputs
+        id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            source_repository="${{ inputs.source_repository }}"
+            source_ref="${{ inputs.source_ref }}"
+            image_tag="${{ inputs.image_tag }}"
+          else
+            source_repository="${{ github.repository }}"
+            source_ref="${{ github.ref_name }}"
+            image_tag="${{ github.ref_name }}"
+          fi
+
+          if [[ ! "$image_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Image tags must look like vX.Y.Z or vX.Y.Z-suffix; got '$image_tag'."
+            exit 1
+          fi
+          if [[ "$image_tag" == *-dirty* ]]; then
+            echo "::error::Refusing to publish dirty tag '$image_tag'."
+            exit 1
+          fi
+
+          echo "source_repository=$source_repository" >> "$GITHUB_OUTPUT"
+          echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout source repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.vars.outputs.source_repository }}
+          ref: ${{ steps.vars.outputs.source_ref }}
+          fetch-depth: 0
+
+      - name: Capture source metadata
+        id: source_meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "commit_short=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+          echo "commit_date=$(git show -s --format=%cI HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          pull: true
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.BACKEND_IMAGE }}:${{ steps.vars.outputs.image_tag }}
+            ${{ env.BACKEND_IMAGE }}:prod
+          cache-from: type=gha,scope=chek-prod-backend-amd64
+          cache-to: type=gha,mode=max,scope=chek-prod-backend-amd64
+          build-args: |
+            VERSION=${{ steps.vars.outputs.image_tag }}
+            COMMIT=${{ steps.source_meta.outputs.commit }}
+            DATE=${{ steps.source_meta.outputs.commit_date }}
+
+      - name: Build and push web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.web
+          pull: true
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.WEB_IMAGE }}:${{ steps.vars.outputs.image_tag }}
+            ${{ env.WEB_IMAGE }}:prod
+          cache-from: type=gha,scope=chek-prod-web-amd64
+          cache-to: type=gha,mode=max,scope=chek-prod-web-amd64
+          build-args: |
+            NEXT_PUBLIC_APP_VERSION=${{ steps.vars.outputs.image_tag }}
+
+      - name: Checkout ops-bootstrap
+        uses: actions/checkout@v4
+        with:
+          repository: chekdata/ops-bootstrap
+          ref: main
+          token: ${{ secrets.OPS_BOOTSTRAP_TOKEN }}
+          path: ops-bootstrap
+
+      - name: Update multica prod manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib
+          import re
+
+          path = pathlib.Path("ops-bootstrap/apps/multica/prod/deployment.yaml")
+          text = path.read_text(encoding="utf-8")
+          replacements = {
+              r"ghcr\.io/[^/\s]+/multica-backend:[^\s]+": "${{ env.BACKEND_IMAGE }}:${{ steps.vars.outputs.image_tag }}",
+              r"ghcr\.io/[^/\s]+/multica-web:[^\s]+": "${{ env.WEB_IMAGE }}:${{ steps.vars.outputs.image_tag }}",
+          }
+          updated = text
+          for pattern, replacement in replacements.items():
+              updated = re.sub(pattern, replacement, updated)
+          if updated != text:
+              path.write_text(updated, encoding="utf-8")
+          else:
+              print("manifest already references requested images")
+          PY
+
+      - name: Create pull request in ops-bootstrap
+        id: cpr
+        uses: peter-evans/create-pull-request@v6
+        with:
+          path: ops-bootstrap
+          token: ${{ secrets.OPS_BOOTSTRAP_TOKEN }}
+          commit-message: "chore(prod): bump multica image to ${{ steps.vars.outputs.image_tag }}"
+          title: "chore(prod): bump multica image to ${{ steps.vars.outputs.image_tag }}"
+          body: |
+            This PR is auto-generated by `chek-prod-release.yml`.
+
+            - source repository: `${{ steps.vars.outputs.source_repository }}`
+            - source ref: `${{ steps.vars.outputs.source_ref }}`
+            - source commit: `${{ steps.source_meta.outputs.commit }}`
+            - backend image: `${{ env.BACKEND_IMAGE }}:${{ steps.vars.outputs.image_tag }}`
+            - web image: `${{ env.WEB_IMAGE }}:${{ steps.vars.outputs.image_tag }}`
+          base: main
+          branch: bot/image-bump/multica/${{ steps.vars.outputs.image_tag }}
+          delete-branch: true
+
+      - name: Append release summary
+        shell: bash
+        run: |
+          {
+            echo "## CHEK Prod Release"
+            echo ""
+            echo "- Source repository: \`${{ steps.vars.outputs.source_repository }}\`"
+            echo "- Source ref: \`${{ steps.vars.outputs.source_ref }}\`"
+            echo "- Source commit: \`${{ steps.source_meta.outputs.commit }}\`"
+            echo "- Backend image: \`${{ env.BACKEND_IMAGE }}:${{ steps.vars.outputs.image_tag }}\`"
+            echo "- Web image: \`${{ env.WEB_IMAGE }}:${{ steps.vars.outputs.image_tag }}\`"
+            if [[ -n "${{ steps.cpr.outputs.pull-request-url }}" ]]; then
+              echo "- GitOps PR: ${{ steps.cpr.outputs.pull-request-url }}"
+            else
+              echo "- GitOps PR: no manifest diff was created"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
