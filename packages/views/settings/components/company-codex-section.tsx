@@ -28,6 +28,8 @@ import { SettingsSection } from "./settings-layout";
 
 type CopiedField = "credential" | "config" | "command" | null;
 
+const CC_SWITCH_RELEASES_URL = "https://github.com/farion1231/cc-switch/releases";
+
 export function CompanyCodexSection() {
   const { t } = useT("settings");
   const [keyStatus, setKeyStatus] = useState<CompanyCodexKeyStatus | null>(null);
@@ -204,7 +206,7 @@ export function CompanyCodexSection() {
       </SettingsSection>
 
       <Dialog open={!!issued} onOpenChange={(open) => { if (!open) setIssued(null); }}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="max-h-[calc(100dvh-2rem)] min-w-0 overflow-x-hidden overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{t(($) => $.company_codex.created_title)}</DialogTitle>
           </DialogHeader>
@@ -213,11 +215,11 @@ export function CompanyCodexSection() {
             <AlertDescription>{t(($) => $.company_codex.created_warning)}</AlertDescription>
           </Alert>
           {issued ? (
-            <div className="space-y-4">
-              <div className="space-y-1.5">
+            <div className="min-w-0 space-y-4">
+              <div className="min-w-0 space-y-1.5">
                 <div className="text-caption font-medium">{t(($) => $.company_codex.credential)}</div>
-                <div className="flex gap-2">
-                  <code className="min-w-0 flex-1 truncate rounded-md border bg-muted/50 px-3 py-2 text-body select-all">{issued.credential}</code>
+                <div className="flex min-w-0 gap-2">
+                  <code className="block min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap rounded-md border bg-muted/50 px-3 py-2 text-body select-all">{issued.credential}</code>
                   <Button variant="outline" size="icon" onClick={() => void copy("credential", issued.credential)}>
                     {copied === "credential" ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                   </Button>
@@ -225,33 +227,42 @@ export function CompanyCodexSection() {
               </div>
 
               <div className="grid gap-3 sm:grid-cols-2">
-                <Card>
+                <Card className="min-w-0">
                   <CardContent className="space-y-3">
                     <div>
                       <div className="text-body font-medium">{t(($) => $.company_codex.cc_switch)}</div>
                       <p className="mt-1 text-caption text-muted-foreground">{t(($) => $.company_codex.cc_switch_hint)}</p>
                     </div>
-                    <Button className="w-full" onClick={() => window.location.assign(issued.cc_switch_url)}>
+                    <Button className="w-full min-w-0" onClick={() => window.location.assign(issued.cc_switch_url)}>
                       <ExternalLink className="h-4 w-4" />
-                      {t(($) => $.company_codex.open_cc_switch)}
+                      <span className="truncate">{t(($) => $.company_codex.open_cc_switch)}</span>
                     </Button>
+                    <a
+                      href={CC_SWITCH_RELEASES_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-caption text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      {t(($) => $.company_codex.download_cc_switch)}
+                    </a>
                   </CardContent>
                 </Card>
-                <Card>
+                <Card className="min-w-0">
                   <CardContent className="space-y-3">
                     <div>
                       <div className="text-body font-medium">{t(($) => $.company_codex.official_gui)}</div>
                       <p className="mt-1 text-caption text-muted-foreground">{t(($) => $.company_codex.official_gui_hint)}</p>
                     </div>
-                    <Button variant="outline" className="w-full" onClick={() => void copy("command", issued.setup_command)}>
+                    <Button variant="outline" className="w-full min-w-0" onClick={() => void copy("command", issued.setup_command)}>
                       {copied === "command" ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                      {t(($) => $.company_codex.copy_command)}
+                      <span className="truncate">{t(($) => $.company_codex.copy_command)}</span>
                     </Button>
                   </CardContent>
                 </Card>
               </div>
 
-              <details className="rounded-lg border border-surface-border px-4 py-3">
+              <details className="min-w-0 rounded-lg border border-surface-border px-4 py-3">
                 <summary className="cursor-pointer text-body font-medium">{t(($) => $.company_codex.manual_config)}</summary>
                 <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap rounded-md bg-muted/50 p-3 text-caption">{issued.config_toml}</pre>
                 <Button variant="ghost" size="sm" className="mt-2" onClick={() => void copy("config", issued.config_toml)}>
