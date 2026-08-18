@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS company_codex_key_gateway_unique_idx;

@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS company_codex_turn_session_time_idx;

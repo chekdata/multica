@@ -39,6 +39,7 @@ import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { useT } from "../../i18n";
 import { SettingsSection, SettingsTab } from "./settings-layout";
+import { CompanyCodexSection } from "./company-codex-section";
 
 const EXPIRY_KEYS = ["30", "90", "365", "never"] as const;
 
@@ -130,6 +131,8 @@ export function TokensTab() {
 
   return (
     <SettingsTab title={t(($) => $.tokens.title)}>
+      <CompanyCodexSection />
+
       <SettingsSection
         description={
           <>

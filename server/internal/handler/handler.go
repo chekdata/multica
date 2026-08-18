@@ -128,6 +128,13 @@ type Config struct {
 	// Surfaced through /api/config so self-hosted operators can confirm which
 	// server build is deployed. Empty in dev builds.
 	ServerVersion string
+	// CompanyCodexBroker* enable the self-host-only managed Codex access
+	// surface. The broker owns upstream credentials; Multica stores only key
+	// identifiers and audit records.
+	CompanyCodexBrokerURL    string
+	CompanyCodexBrokerSecret string
+	CompanyCodexBaseURL      string
+	CompanyCodexDefaultModel string
 }
 
 type cloudRuntimeProxy interface {

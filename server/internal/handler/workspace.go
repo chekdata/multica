@@ -868,6 +868,33 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	companyCodexGatewayKeyIDs := make([]string, 0)
+	companyCodexRows, err := tx.Query(r.Context(), `
+		SELECT gateway_key_id
+		FROM company_codex_key
+		WHERE workspace_id = $1 AND status = 'active'
+		FOR UPDATE
+	`, requester.WorkspaceID)
+	if err != nil {
+		failWorkspaceDelete(w, r, workspaceID, "lock company Codex keys", err)
+		return
+	}
+	for companyCodexRows.Next() {
+		var gatewayKeyID string
+		if err := companyCodexRows.Scan(&gatewayKeyID); err != nil {
+			companyCodexRows.Close()
+			failWorkspaceDelete(w, r, workspaceID, "read company Codex keys", err)
+			return
+		}
+		companyCodexGatewayKeyIDs = append(companyCodexGatewayKeyIDs, gatewayKeyID)
+	}
+	if err := companyCodexRows.Err(); err != nil {
+		companyCodexRows.Close()
+		failWorkspaceDelete(w, r, workspaceID, "read company Codex keys", err)
+		return
+	}
+	companyCodexRows.Close()
+
 	// Keep the relationship graph in the application layer. Each step is a
 	// set-based delete scoped by workspace_id; the legacy cascades remain only
 	// as an expand-phase safety net until a later schema contract.
@@ -958,6 +985,24 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 			run:  func() error { return qtx.DeleteWorkspaceAdministration(ctx, requester.WorkspaceID) },
 		},
 		{
+			name: "delete company Codex data",
+			run: func() error {
+				if _, err := tx.Exec(ctx, `
+					DELETE FROM company_codex_turn
+					WHERE session_id IN (
+						SELECT id FROM company_codex_session WHERE workspace_id = $1
+					)
+				`, requester.WorkspaceID); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, `DELETE FROM company_codex_session WHERE workspace_id = $1`, requester.WorkspaceID); err != nil {
+					return err
+				}
+				_, err := tx.Exec(ctx, `DELETE FROM company_codex_key WHERE workspace_id = $1`, requester.WorkspaceID)
+				return err
+			},
+		},
+		{
 			// At this point workspaceMember has resolved → workspaceID is a
 			// valid UUID, so reuse the resolved value. The existing final
 			// statement also sweeps any expand-phase compatibility leftovers.
@@ -977,6 +1022,7 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete workspace")
 		return
 	}
+	h.deleteCompanyCodexGatewayKeys(r.Context(), companyCodexGatewayKeyIDs)
 
 	slog.Info("workspace deleted", append(logger.RequestAttrs(r), "workspace_id", workspaceID)...)
 	h.publish(protocol.EventWorkspaceDeleted, workspaceID, "member", requestUserID(r), map[string]any{

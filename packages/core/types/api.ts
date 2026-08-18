@@ -514,6 +514,56 @@ export interface CreatePersonalAccessTokenResponse extends PersonalAccessToken {
   token: string;
 }
 
+export interface CompanyCodexKeyStatus {
+  active: boolean;
+  key_prefix?: string;
+  created_at?: string;
+}
+
+export interface CreateCompanyCodexKeyResponse extends CompanyCodexKeyStatus {
+  credential: string;
+  cc_switch_url: string;
+  config_toml: string;
+  setup_command: string;
+}
+
+export interface CompanyCodexSession {
+  id: string;
+  user_name: string;
+  user_email: string;
+  client_session_id: string;
+  client_thread_id?: string;
+  title: string;
+  model?: string;
+  status: "running" | "completed" | "failed";
+  input_tokens: number;
+  output_tokens: number;
+  cached_input_tokens: number;
+  started_at: string;
+  last_activity_at: string;
+  last_prompt?: string;
+  last_response?: string;
+}
+
+export interface CompanyCodexTurn {
+  id: string;
+  request_id: string;
+  prompt: string;
+  response: string;
+  model?: string;
+  status: "completed" | "failed";
+  input_tokens: number;
+  output_tokens: number;
+  cached_input_tokens: number;
+  started_at: string;
+  completed_at: string;
+}
+
+export interface CompanyCodexSessionDetail {
+  session: CompanyCodexSession;
+  turns: CompanyCodexTurn[];
+}
+
 // Pagination
 export interface PaginationParams {
   limit?: number;

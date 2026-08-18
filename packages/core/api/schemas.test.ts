@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   AppConfigSchema,
+  CompanyCodexKeyStatusSchema,
+  CompanyCodexSessionDetailSchema,
+  CompanyCodexSessionListSchema,
+  CreateCompanyCodexKeyResponseSchema,
+  EMPTY_COMPANY_CODEX_KEY_STATUS,
   WecomInstallationSchema,
   ListWecomInstallationsResponseSchema,
   RedeemWecomBindingTokenResponseSchema,
@@ -50,6 +55,42 @@ import {
 } from "./schemas";
 import { IssueViewSchema, IssueViewListSchema } from "./schemas";
 import { parseWithFallback } from "./schema";
+
+describe("company Codex schemas", () => {
+  const session = {
+    id: "session-1",
+    user_name: "Employee",
+    user_email: "employee@chekkk.com",
+    client_session_id: "desktop-session",
+    title: "Company work",
+    status: "completed",
+    input_tokens: 10,
+    output_tokens: 20,
+    cached_input_tokens: 0,
+    started_at: "2026-08-18T00:00:00Z",
+    last_activity_at: "2026-08-18T00:01:00Z",
+  };
+
+  it("defaults malformed key status to inactive", () => {
+    expect(parseWithFallback(null, CompanyCodexKeyStatusSchema, EMPTY_COMPANY_CODEX_KEY_STATUS, {
+      endpoint: "GET /api/company-codex/key",
+    })).toEqual({ active: false });
+  });
+
+  it("rejects an issued key response without its one-time credential", () => {
+    expect(CreateCompanyCodexKeyResponseSchema.safeParse({ active: true }).success).toBe(false);
+  });
+
+  it("keeps future status values and rejects malformed session list items", () => {
+    expect(CompanyCodexSessionListSchema.parse([{ ...session, status: "archived" }])[0]?.status)
+      .toBe("archived");
+    expect(CompanyCodexSessionListSchema.safeParse([{ title: "missing id" }]).success).toBe(false);
+  });
+
+  it("defaults a missing turn list in session detail", () => {
+    expect(CompanyCodexSessionDetailSchema.parse({ session }).turns).toEqual([]);
+  });
+});
 
 const baseIssue = {
   id: "11111111-1111-1111-1111-111111111111",
