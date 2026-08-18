@@ -15,6 +15,7 @@ import type {
   BillingTopupsPage,
   BillingTransactionsPage,
   CancelTaskResponse,
+  CompanyCodexKeyStatus,
   ChatMessage,
   ChatDraftRestoresResponse,
   ChatPendingTask,
@@ -64,6 +65,62 @@ import type {
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 import type { CreateFeedbackResponse } from "../feedback/types";
+
+export const CompanyCodexKeyStatusSchema = z.object({
+  active: z.boolean().default(false),
+  key_prefix: z.string().optional(),
+  created_at: z.string().optional(),
+}).loose();
+
+export const EMPTY_COMPANY_CODEX_KEY_STATUS: CompanyCodexKeyStatus = {
+  active: false,
+};
+
+export const CreateCompanyCodexKeyResponseSchema = CompanyCodexKeyStatusSchema.extend({
+  credential: z.string().min(1),
+  cc_switch_url: z.string().min(1),
+  config_toml: z.string().min(1),
+  setup_command: z.string().min(1),
+}).loose();
+
+export const CompanyCodexSessionSchema = z.object({
+  id: z.string().min(1),
+  user_name: z.string().default(""),
+  user_email: z.string().default(""),
+  client_session_id: z.string().default(""),
+  client_thread_id: z.string().optional(),
+  title: z.string().default("Codex GUI session"),
+  model: z.string().optional(),
+  status: z.string().default("completed"),
+  input_tokens: z.number().default(0),
+  output_tokens: z.number().default(0),
+  cached_input_tokens: z.number().default(0),
+  started_at: z.string().default(""),
+  last_activity_at: z.string().default(""),
+  last_prompt: z.string().optional(),
+  last_response: z.string().optional(),
+}).loose();
+
+export const CompanyCodexSessionListSchema = z.array(CompanyCodexSessionSchema);
+
+export const CompanyCodexTurnSchema = z.object({
+  id: z.string().min(1),
+  request_id: z.string().default(""),
+  prompt: z.string().default(""),
+  response: z.string().default(""),
+  model: z.string().optional(),
+  status: z.string().default("completed"),
+  input_tokens: z.number().default(0),
+  output_tokens: z.number().default(0),
+  cached_input_tokens: z.number().default(0),
+  started_at: z.string().default(""),
+  completed_at: z.string().default(""),
+}).loose();
+
+export const CompanyCodexSessionDetailSchema = z.object({
+  session: CompanyCodexSessionSchema,
+  turns: z.array(CompanyCodexTurnSchema).default([]),
+}).loose();
 
 export const GitHubInstallationSchema = z.object({
   id: z.string(),

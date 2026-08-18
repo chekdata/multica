@@ -234,6 +234,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		LLMBaseURL:               strings.TrimSpace(os.Getenv("MULTICA_LLM_BASE_URL")),
 		LLMDefaultModel:          strings.TrimSpace(os.Getenv("MULTICA_LLM_DEFAULT_MODEL")),
 		ServerVersion:            normalizeServerVersion(version),
+		CompanyCodexBrokerURL:    strings.TrimRight(strings.TrimSpace(os.Getenv("COMPANY_CODEX_BROKER_URL")), "/"),
+		CompanyCodexBrokerSecret: strings.TrimSpace(os.Getenv("COMPANY_CODEX_BROKER_SECRET")),
+		CompanyCodexBaseURL:      strings.TrimRight(strings.TrimSpace(os.Getenv("COMPANY_CODEX_BASE_URL")), "/"),
+		CompanyCodexDefaultModel: strings.TrimSpace(os.Getenv("COMPANY_CODEX_DEFAULT_MODEL")),
 	}
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig, daemonHub)
 	h.Metrics = opts.BusinessMetrics
@@ -987,6 +991,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// Public API
 	r.Get("/api/config", h.GetConfig)
 	r.With(contactSalesRL).Post("/api/contact-sales", h.CreateContactSales)
+	// Service-to-service endpoints used by the company Codex broker. These sit
+	// outside user auth because the broker authenticates with its own shared
+	// secret and supplies server-sealed identity from the managed credential.
+	r.Post("/api/internal/company-codex/access-check", h.CheckCompanyCodexAccess)
+	r.Post("/api/internal/company-codex/task-access-check", h.CheckCompanyCodexTaskAccess)
+	r.Post("/api/internal/company-codex/turns", h.IngestCompanyCodexTurn)
 
 	// Webhook ingress for autopilots. Outside the authenticated group on
 	// purpose: the bearer token in the URL path IS the credential. Workspace
@@ -1319,6 +1329,15 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// --- Workspace-scoped routes (all require workspace membership) ---
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireWorkspaceMember(queries))
+
+			r.Route("/api/company-codex", func(r chi.Router) {
+				r.Use(handler.RequireHumanActor)
+				r.Get("/key", h.GetCompanyCodexKey)
+				r.Post("/key", h.CreateCompanyCodexKey)
+				r.Delete("/key", h.RevokeCompanyCodexKey)
+				r.Get("/sessions", h.ListCompanyCodexSessions)
+				r.Get("/sessions/{id}", h.GetCompanyCodexSession)
+			})
 
 			// Assignee frequency
 			r.Get("/api/assignee-frequency", h.GetAssigneeFrequency)

@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS company_codex_key_member_unique_idx;

@@ -65,6 +65,10 @@ import type {
   PersonalAccessToken,
   CreatePersonalAccessTokenRequest,
   CreatePersonalAccessTokenResponse,
+  CompanyCodexKeyStatus,
+  CreateCompanyCodexKeyResponse,
+  CompanyCodexSession,
+  CompanyCodexSessionDetail,
   RuntimeUsage,
   IssueUsageSummary,
   RuntimeHourlyActivity,
@@ -351,6 +355,11 @@ import {
   type IssueView,
   type IssueViewPreference,
   type CreateIssueViewRequest,
+  CompanyCodexKeyStatusSchema,
+  CreateCompanyCodexKeyResponseSchema,
+  CompanyCodexSessionListSchema,
+  CompanyCodexSessionDetailSchema,
+  EMPTY_COMPANY_CODEX_KEY_STATUS,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -2333,6 +2342,48 @@ export class ApiClient {
 
   async revokePersonalAccessToken(id: string): Promise<void> {
     await this.fetch(`/api/tokens/${id}`, { method: "DELETE" });
+  }
+
+  async getCompanyCodexKey(): Promise<CompanyCodexKeyStatus> {
+    const raw = await this.fetch<unknown>("/api/company-codex/key");
+    return parseWithFallback(raw, CompanyCodexKeyStatusSchema, EMPTY_COMPANY_CODEX_KEY_STATUS, {
+      endpoint: "GET /api/company-codex/key",
+    });
+  }
+
+  async createCompanyCodexKey(): Promise<CreateCompanyCodexKeyResponse> {
+    const raw = await this.fetch<unknown>("/api/company-codex/key", { method: "POST" });
+    const created = parseWithFallback<CreateCompanyCodexKeyResponse | null>(
+      raw,
+      CreateCompanyCodexKeyResponseSchema,
+      null,
+      { endpoint: "POST /api/company-codex/key" },
+    );
+    if (!created) throw new Error();
+    return created;
+  }
+
+  async revokeCompanyCodexKey(): Promise<void> {
+    await this.fetch("/api/company-codex/key", { method: "DELETE" });
+  }
+
+  async listCompanyCodexSessions(): Promise<CompanyCodexSession[]> {
+    const raw = await this.fetch<unknown>("/api/company-codex/sessions");
+    return parseWithFallback(raw, CompanyCodexSessionListSchema, [], {
+      endpoint: "GET /api/company-codex/sessions",
+    });
+  }
+
+  async getCompanyCodexSession(id: string): Promise<CompanyCodexSessionDetail> {
+    const raw = await this.fetch<unknown>(`/api/company-codex/sessions/${id}`);
+    const detail = parseWithFallback<CompanyCodexSessionDetail | null>(
+      raw,
+      CompanyCodexSessionDetailSchema,
+      null,
+      { endpoint: "GET /api/company-codex/sessions/{id}" },
+    );
+    if (!detail) throw new Error();
+    return detail;
   }
 
   // File Upload & Attachments

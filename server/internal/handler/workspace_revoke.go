@@ -72,6 +72,28 @@ func (h *Handler) revokeAndRemoveMember(ctx context.Context, workspaceID, userID
 	}
 
 	result := revocationResult{Runtimes: runtimes}
+	rows, err := tx.Query(ctx, `
+		SELECT gateway_key_id
+		FROM company_codex_key
+		WHERE workspace_id = $1 AND user_id = $2 AND status = 'active'
+		FOR UPDATE
+	`, workspaceID, userID)
+	if err != nil {
+		return empty, err
+	}
+	for rows.Next() {
+		var gatewayKeyID string
+		if err := rows.Scan(&gatewayKeyID); err != nil {
+			rows.Close()
+			return empty, err
+		}
+		result.CompanyCodexGatewayKeyIDs = append(result.CompanyCodexGatewayKeyIDs, gatewayKeyID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return empty, err
+	}
+	rows.Close()
 
 	if len(runtimes) > 0 {
 		runtimeIDs := make([]pgtype.UUID, len(runtimes))
@@ -182,6 +204,17 @@ func (h *Handler) revokeAndRemoveMember(ctx context.Context, workspaceID, userID
 		return empty, err
 	}
 
+	// A managed company Codex credential is valid only while both membership
+	// and this row are active. Revoke it in the same transaction so removing
+	// and later re-inviting a member cannot resurrect an old GUI credential.
+	if _, err := tx.Exec(ctx, `
+		UPDATE company_codex_key
+		SET status = 'revoked', revoked_at = now(), updated_at = now()
+		WHERE workspace_id = $1 AND user_id = $2 AND status = 'active'
+	`, workspaceID, userID); err != nil {
+		return empty, err
+	}
+
 	// issue_subscriber carries no FK either (same MUL-3515 rule as the two
 	// prunes above), and MUL-5483 gave agents a path that writes member
 	// subscriber rows on their own initiative. Dropping them in this tx is what
@@ -214,15 +247,16 @@ func (h *Handler) revokeAndRemoveMember(ctx context.Context, workspaceID, userID
 // Publishing inside the transaction would let subscribers observe a state the
 // tx might still roll back (see TaskService.BroadcastCancelledTasks docstring).
 type revocationResult struct {
-	Runtimes           []db.AgentRuntime
-	ArchivedAgents     []db.Agent
-	CancelledTasks     []db.AgentTaskQueue
-	OfflineRuntimeIDs  []db.ForceOfflineRuntimesByIDsRow
-	RevokedTokenHashes []string
+	Runtimes                  []db.AgentRuntime
+	ArchivedAgents            []db.Agent
+	CancelledTasks            []db.AgentTaskQueue
+	OfflineRuntimeIDs         []db.ForceOfflineRuntimesByIDsRow
+	RevokedTokenHashes        []string
+	CompanyCodexGatewayKeyIDs []string
 }
 
 func (r revocationResult) isEmpty() bool {
-	return len(r.Runtimes) == 0
+	return len(r.Runtimes) == 0 && len(r.CompanyCodexGatewayKeyIDs) == 0
 }
 
 // publishRevocation runs all post-commit side effects: invalidate daemon token
@@ -233,6 +267,7 @@ func (h *Handler) publishRevocation(ctx context.Context, result revocationResult
 	if result.isEmpty() {
 		return
 	}
+	h.deleteCompanyCodexGatewayKeys(ctx, result.CompanyCodexGatewayKeyIDs)
 
 	for _, hash := range result.RevokedTokenHashes {
 		h.DaemonTokenCache.Invalidate(ctx, hash)
@@ -278,6 +313,7 @@ func logRevocation(result revocationResult, workspaceID, userID string, attrs ..
 		"tasks_cancelled", len(result.CancelledTasks),
 		"runtimes_taken_offline", len(result.OfflineRuntimeIDs),
 		"daemon_tokens_revoked", len(result.RevokedTokenHashes),
+		"company_codex_keys_revoked", len(result.CompanyCodexGatewayKeyIDs),
 	}
 	slog.Info("member runtimes revoked", append(base, attrs...)...)
 }
