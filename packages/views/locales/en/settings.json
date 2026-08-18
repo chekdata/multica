@@ -861,6 +861,7 @@
     "credential": "Managed API credential",
     "cc_switch_hint": "Recommended: import and switch the provider with one confirmation.",
     "open_cc_switch": "Open in CC Switch",
+    "download_cc_switch": "Download CC Switch (official releases)",
     "official_gui": "Official Codex GUI",
     "official_gui_hint": "Run the one-time poolctl command, then paste the credential when prompted. No custom launcher is installed.",
     "copy_command": "Copy setup command",

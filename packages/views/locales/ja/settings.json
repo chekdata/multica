@@ -860,6 +860,7 @@
     "credential": "管理対象 API 認証情報",
     "cc_switch_hint": "推奨: 1 回の確認でプロバイダーをインポートして切り替えます。",
     "open_cc_switch": "CC Switch で開く",
+    "download_cc_switch": "CC Switch をダウンロード（公式 Releases）",
     "official_gui": "公式 Codex GUI",
     "official_gui_hint": "poolctl コマンドを一度実行し、表示されたプロンプトに認証情報を貼り付けます。専用ランチャーはインストールされません。",
     "copy_command": "設定コマンドをコピー",

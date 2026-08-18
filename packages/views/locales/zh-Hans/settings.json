@@ -860,6 +860,7 @@
     "credential": "受管 API 凭证",
     "cc_switch_hint": "推荐方式：确认一次即可导入并切换供应商。",
     "open_cc_switch": "在 CC Switch 中打开",
+    "download_cc_switch": "下载 CC Switch（官方 Releases）",
     "official_gui": "官方 Codex GUI",
     "official_gui_hint": "运行一次 poolctl 命令，并按提示粘贴凭证；不会安装专用启动器。",
     "copy_command": "复制配置命令",

@@ -626,6 +626,7 @@
     "credential": "관리형 API 자격 증명",
     "cc_switch_hint": "권장: 한 번의 확인으로 공급자를 가져오고 전환합니다.",
     "open_cc_switch": "CC Switch에서 열기",
+    "download_cc_switch": "CC Switch 다운로드(공식 Releases)",
     "official_gui": "공식 Codex GUI",
     "official_gui_hint": "poolctl 명령을 한 번 실행한 뒤 프롬프트에 자격 증명을 붙여 넣으세요. 전용 실행기는 설치되지 않습니다.",
     "copy_command": "설정 명령 복사",
