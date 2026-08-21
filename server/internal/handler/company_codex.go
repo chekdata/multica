@@ -391,10 +391,7 @@ func (h *Handler) IncreaseCompanyCodexKeyQuota(w http.ResponseWriter, r *http.Re
 		return
 	}
 	slog.Info("company Codex quota increased",
-		"user_id", userID,
-		"workspace_id", workspaceID,
 		"gateway_key_id", gatewayKeyID,
-		"additional_tokens", requested.AdditionalTokens,
 		"weekly_token_limit", quota.WeeklyTokenLimit,
 	)
 	writeJSON(w, http.StatusOK, companyCodexKeyStatus{
