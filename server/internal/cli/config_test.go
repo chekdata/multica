@@ -121,6 +121,32 @@ func TestCLIConfig_OpenClawOverride_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestCLIConfig_CodexOverride_RoundTrip(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	original := CLIConfig{
+		ServerURL: "https://api.multica.ai",
+		Backends: &BackendOverrides{
+			Codex: &CodexOverride{BinaryPath: "/opt/company/bin/mcodex"},
+		},
+	}
+	if err := SaveCLIConfig(original); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadCLIConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Backends == nil || loaded.Backends.Codex == nil {
+		t.Fatalf("Backends.Codex should be non-nil after round-trip, got %+v", loaded.Backends)
+	}
+	if got := loaded.Backends.Codex.BinaryPath; got != "/opt/company/bin/mcodex" {
+		t.Errorf("Codex BinaryPath round-trip: got %q", got)
+	}
+}
+
 // TestCLIConfig_OpenClawOverride_PartialFieldsOmitted verifies that an
 // override with only one field set does not emit empty strings for the
 // unset field. Important so users can intentionally set only BinaryPath

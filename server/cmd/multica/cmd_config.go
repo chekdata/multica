@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +32,7 @@ var configSetSupportedKeys = []string{
 	"server_url",
 	"app_url",
 	"workspace_id",
+	"codex_path",
 	"device_name",
 	"runtime_name",
 	"max_concurrent_tasks",
@@ -48,7 +50,7 @@ var configSetCmd = &cobra.Command{
 	Use:   "set <key> <value>",
 	Short: "Set a CLI configuration value",
 	Long: "Supported keys: " +
-		"server_url, app_url, workspace_id, " +
+		"server_url, app_url, workspace_id, codex_path, " +
 		"device_name, runtime_name, max_concurrent_tasks, poll_interval, " +
 		"heartbeat_interval, agent_timeout, " +
 		"codex_semantic_inactivity_timeout, codex_handshake_timeout, " +
@@ -95,6 +97,7 @@ func runConfigShow(cmd *cobra.Command, _ []string) error {
 	fmt.Fprintf(os.Stdout, "%-34s %s\n", "server_url:", valueOrDefault(cfg.ServerURL, "(not set)"))
 	fmt.Fprintf(os.Stdout, "%-34s %s\n", "app_url:", valueOrDefault(cfg.AppURL, "(not set)"))
 	fmt.Fprintf(os.Stdout, "%-34s %s\n", "workspace_id:", valueOrDefault(cfg.WorkspaceID, "(not set)"))
+	fmt.Fprintf(os.Stdout, "%-34s %s\n", "codex_path:", valueOrDefault(codexPath(cfg), "(not set)"))
 	fmt.Fprintf(os.Stdout, "%-34s %s\n", "device_name:", valueOrDefault(cfg.DeviceName, "(not set)"))
 	fmt.Fprintf(os.Stdout, "%-34s %s\n", "runtime_name:", valueOrDefault(cfg.RuntimeName, "(not set)"))
 	fmt.Fprintf(os.Stdout, "%-34s %s\n", "max_concurrent_tasks:", intOrDefault(cfg.MaxConcurrentTasks, "(not set)"))
@@ -151,6 +154,23 @@ func applyConfigSet(cfg *cli.CLIConfig, key, value string) error {
 		cfg.AppURL = value
 	case "workspace_id":
 		cfg.WorkspaceID = value
+	case "codex_path":
+		if value == "" {
+			if cfg.Backends != nil {
+				cfg.Backends.Codex = nil
+				if cfg.Backends.OpenClaw == nil {
+					cfg.Backends = nil
+				}
+			}
+			return nil
+		}
+		if !filepath.IsAbs(value) {
+			return fmt.Errorf("codex_path must be an absolute path (got %q)", value)
+		}
+		if cfg.Backends == nil {
+			cfg.Backends = &cli.BackendOverrides{}
+		}
+		cfg.Backends.Codex = &cli.CodexOverride{BinaryPath: filepath.Clean(value)}
 	case "device_name":
 		cfg.DeviceName = value
 	case "runtime_name":
@@ -234,6 +254,13 @@ func applyConfigSet(cfg *cli.CLIConfig, key, value string) error {
 		return fmt.Errorf("unknown config key %q (supported: %s)", key, joinKeys(configSetSupportedKeys))
 	}
 	return nil
+}
+
+func codexPath(cfg cli.CLIConfig) string {
+	if cfg.Backends == nil || cfg.Backends.Codex == nil {
+		return ""
+	}
+	return cfg.Backends.Codex.BinaryPath
 }
 
 // assignBool parses value as a strict bool into dst. Shared by the

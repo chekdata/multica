@@ -167,3 +167,116 @@ func TestFailTaskProviderNetworkBudget(t *testing.T) {
 		})
 	}
 }
+
+// TestFailTaskProviderCapacityRetry verifies that a terminal provider 429 keeps
+// the completed run state available and creates exactly one delayed retry that
+// resumes the same session and work directory.
+func TestFailTaskProviderCapacityRetry(t *testing.T) {
+	pool := newResolveOriginatorPool(t)
+	ctx := context.Background()
+	q := db.New(pool)
+	_, _, agentID, issueID := seedAttributionFixture(t, pool)
+	svc := &TaskService{Queries: q, TxStarter: pool, Bus: events.New()}
+
+	var runtimeID string
+	if err := pool.QueryRow(ctx, `SELECT runtime_id::text FROM agent WHERE id = $1`, agentID).Scan(&runtimeID); err != nil {
+		t.Fatalf("read agent runtime: %v", err)
+	}
+
+	const (
+		sourceSession = "capacity-source-session"
+		sourceWorkDir = "/tmp/capacity-source-workdir"
+		reason        = "agent_error.provider_capacity_or_rate_limit"
+	)
+	var parentID pgtype.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (
+			agent_id, runtime_id, issue_id, status, priority, attempt,
+			max_attempts, session_id, work_dir
+		)
+		VALUES ($1, $2, $3, 'running', 0, 1, 2, $4, $5)
+		RETURNING id
+	`, agentID, runtimeID, issueID, sourceSession, sourceWorkDir).Scan(&parentID); err != nil {
+		t.Fatalf("insert parent task: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE parent_task_id = $1 OR id = $1`, parentID)
+	})
+
+	failureTime := time.Now()
+	if _, err := svc.FailTask(
+		ctx,
+		parentID,
+		"429 Too Many Requests",
+		sourceSession,
+		sourceWorkDir,
+		reason,
+		false,
+		"",
+	); err != nil {
+		t.Fatalf("FailTask: %v", err)
+	}
+
+	var (
+		childStatus      string
+		childAttempt     int32
+		childMaxAttempts int32
+		childSession     string
+		childWorkDir     string
+		childForceFresh  bool
+		childFireAt      pgtype.Timestamptz
+		parentStatus     string
+		parentFailReason pgtype.Text
+		childCount       int
+	)
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*), coalesce(max(status), ''), coalesce(max(attempt), 0),
+			coalesce(max(max_attempts), 0), coalesce(max(session_id), ''),
+			coalesce(max(work_dir), ''), coalesce(bool_or(force_fresh_session), false),
+			max(fire_at)
+		FROM agent_task_queue
+		WHERE parent_task_id = $1
+	`, parentID).Scan(
+		&childCount,
+		&childStatus,
+		&childAttempt,
+		&childMaxAttempts,
+		&childSession,
+		&childWorkDir,
+		&childForceFresh,
+		&childFireAt,
+	); err != nil {
+		t.Fatalf("read retry child: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		SELECT status, failure_reason FROM agent_task_queue WHERE id = $1
+	`, parentID).Scan(&parentStatus, &parentFailReason); err != nil {
+		t.Fatalf("read failed parent: %v", err)
+	}
+
+	if childCount != 1 {
+		t.Fatalf("retry children = %d, want exactly 1", childCount)
+	}
+	if parentStatus != "failed" || !parentFailReason.Valid || parentFailReason.String != reason {
+		t.Errorf("parent = status %q reason %q, want failed/%q", parentStatus, parentFailReason.String, reason)
+	}
+	if childStatus != "deferred" || !childFireAt.Valid {
+		t.Fatalf("child = status %q fire_at %v, want deferred with fire_at", childStatus, childFireAt)
+	}
+	if childAttempt != 2 || childMaxAttempts != 2 {
+		t.Errorf("child budget = %d/%d, want attempt 2/max 2", childAttempt, childMaxAttempts)
+	}
+	if childSession != sourceSession || childWorkDir != sourceWorkDir || childForceFresh {
+		t.Errorf(
+			"child resume state = session %q workdir %q force_fresh %v",
+			childSession,
+			childWorkDir,
+			childForceFresh,
+		)
+	}
+	minimumFireAt := failureTime.Add(providerCapacityRetryWait - 2*time.Second)
+	maximumFireAt := time.Now().Add(providerCapacityRetryWait + 2*time.Second)
+	if childFireAt.Time.Before(minimumFireAt) || childFireAt.Time.After(maximumFireAt) {
+		t.Errorf("child fire_at = %v, want about %s after failure", childFireAt.Time, providerCapacityRetryWait)
+	}
+}

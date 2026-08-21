@@ -169,12 +169,12 @@ func TestFailTask_AlreadyFinalized(t *testing.T) {
 	}
 }
 
-// TestProviderNetworkRetrySchedule locks in the three-tier schedule for a
-// transient provider stream cut (MUL-4910): first run + immediate retry + one
-// retry deferred ~5s, and only for provider_network — other retryable reasons
-// keep their generic max_attempts=2 (single, immediate retry).
-func TestProviderNetworkRetrySchedule(t *testing.T) {
+// TestProviderTransientRetrySchedule locks in the retry schedules for transient
+// provider failures: provider_network gets its three-tier sequence, while
+// provider capacity/rate-limit failures get one delayed, resume-safe retry.
+func TestProviderTransientRetrySchedule(t *testing.T) {
 	const provNet = "agent_error.provider_network"
+	const provCapacity = "agent_error.provider_capacity_or_rate_limit"
 
 	// Attempt ceiling: provider_network is raised to 3, but only ever WIDENS the
 	// budget and never overrides the max_attempts<=1 "retry disabled" contract.
@@ -195,15 +195,16 @@ func TestProviderNetworkRetrySchedule(t *testing.T) {
 		}
 	}
 
-	// Backoff: only provider_network's final attempt (after the 2nd failure) is
-	// deferred; its first retry and every other reason are immediate.
+	// Backoff: provider_network's final attempt (after the 2nd failure) is
+	// deferred; provider capacity gets a cooldown before its single retry.
 	delayCases := []struct {
 		reason        string
 		failedAttempt int32
 		want          time.Duration
 	}{
 		{provNet, 1, 0}, // first failure → immediate retry
-		{provNet, 2, providerNetworkFinalRetryWait}, // second failure → 5s-deferred retry
+		{provNet, 2, providerNetworkFinalRetryWait},  // second failure → 5s-deferred retry
+		{provCapacity, 1, providerCapacityRetryWait}, // capacity failure → bounded cooldown
 		{"timeout", 2, 0}, // unrelated reason → never deferred
 	}
 	for _, tc := range delayCases {
@@ -232,6 +233,8 @@ func TestProviderNetworkRetrySchedule(t *testing.T) {
 		{"provider_network second run still retries (deferred tier)", provNet, 2, 2, true},
 		{"provider_network third run is the ceiling", provNet, 3, 2, false},
 		{"provider_network with retry disabled (max_attempts=1) never retries", provNet, 1, 1, false},
+		{"provider capacity first run retries", provCapacity, 1, 2, true},
+		{"provider capacity exhausts at attempt 2", provCapacity, 2, 2, false},
 		{"timeout keeps single immediate retry", "timeout", 1, 2, true},
 		{"timeout exhausts at attempt 2", "timeout", 2, 2, false},
 		{"non-retryable reason never retries", "agent_error.unknown", 1, 2, false},
@@ -255,6 +258,7 @@ func TestTaskFailureClassifiers(t *testing.T) {
 		// Transient mid-stream provider disconnect (MUL-4910): retryable, and
 		// resume-safe so the retry continues the truncated conversation.
 		{reason: "agent_error.provider_network", wantType: "agent_error", wantResumeOK: true, wantRetry: true},
+		{reason: "agent_error.provider_capacity_or_rate_limit", wantType: "agent_error", wantResumeOK: true, wantRetry: true},
 		{reason: "runtime_recovery", wantType: "runtime", wantResumeOK: true, wantRetry: true},
 		{reason: "iteration_limit", wantType: "agent_output", wantResumeOK: false, wantRetry: false},
 		{reason: "api_invalid_request", wantType: "agent_error", wantResumeOK: false, wantRetry: false},

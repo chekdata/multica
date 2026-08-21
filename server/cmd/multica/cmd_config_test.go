@@ -62,6 +62,7 @@ func TestRunConfigShowIncludesProfileAndDefaults(t *testing.T) {
 		"server_url:",
 		"app_url:",
 		"workspace_id:",
+		"codex_path:",
 		"device_name:",
 		"runtime_name:",
 		"max_concurrent_tasks:",
@@ -196,6 +197,7 @@ func TestApplyConfigSetSupportsDaemonKeys(t *testing.T) {
 
 	cfg := cli.CLIConfig{}
 	pairs := []struct{ key, val string }{
+		{"codex_path", "/opt/company/bin/mcodex"},
 		{"device_name", "vm-1-custom-name"},
 		{"runtime_name", "worker-a"},
 		{"max_concurrent_tasks", "4"},
@@ -213,6 +215,7 @@ func TestApplyConfigSetSupportsDaemonKeys(t *testing.T) {
 		}
 	}
 	if cfg.DeviceName != "vm-1-custom-name" ||
+		codexPath(cfg) != "/opt/company/bin/mcodex" ||
 		cfg.RuntimeName != "worker-a" ||
 		cfg.MaxConcurrentTasks != 4 ||
 		cfg.PollInterval != "10s" ||
@@ -223,6 +226,34 @@ func TestApplyConfigSetSupportsDaemonKeys(t *testing.T) {
 		cfg.AutoUpdateCheckInterval != "12h" ||
 		cfg.DisableAutoReload != true {
 		t.Fatalf("cfg after set = %+v", cfg)
+	}
+}
+
+func TestApplyConfigSetCodexPathValidationAndClear(t *testing.T) {
+	t.Parallel()
+
+	cfg := cli.CLIConfig{
+		Backends: &cli.BackendOverrides{
+			OpenClaw: &cli.OpenClawOverride{StateDir: "/var/lib/openclaw"},
+		},
+	}
+	if err := applyConfigSet(&cfg, "codex_path", "relative/mcodex"); err == nil {
+		t.Fatal("relative codex_path should be rejected")
+	}
+	if err := applyConfigSet(&cfg, "codex_path", "/opt/company/bin/../bin/mcodex"); err != nil {
+		t.Fatalf("set codex_path: %v", err)
+	}
+	if got := codexPath(cfg); got != "/opt/company/bin/mcodex" {
+		t.Fatalf("codex_path = %q, want cleaned absolute path", got)
+	}
+	if err := applyConfigSet(&cfg, "codex_path", ""); err != nil {
+		t.Fatalf("clear codex_path: %v", err)
+	}
+	if got := codexPath(cfg); got != "" {
+		t.Fatalf("codex_path after clear = %q", got)
+	}
+	if cfg.Backends == nil || cfg.Backends.OpenClaw == nil {
+		t.Fatal("clearing codex_path should preserve unrelated backend overrides")
 	}
 }
 

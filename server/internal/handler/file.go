@@ -548,8 +548,7 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 
 		link, err := h.Storage.Upload(r.Context(), key, data, contentType, header.Filename)
 		if err != nil {
-			slog.Error("file upload failed", "error", err)
-			writeError(w, http.StatusInternalServerError, "upload failed")
+			writeStorageUploadError(w, err)
 			return
 		}
 		params.Url = link
@@ -575,8 +574,7 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 	// No workspace context (e.g. avatar upload) — upload directly.
 	link, err := h.Storage.Upload(r.Context(), key, data, contentType, header.Filename)
 	if err != nil {
-		slog.Error("file upload failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "upload failed")
+		writeStorageUploadError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{
@@ -584,6 +582,16 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 		"url":      link,
 		"filename": header.Filename,
 	})
+}
+
+func writeStorageUploadError(w http.ResponseWriter, err error) {
+	slog.Error("file upload failed", "error", err)
+	writeErrorCode(
+		w,
+		http.StatusBadGateway,
+		"storage_upload_failed",
+		"file storage rejected the upload; contact an administrator",
+	)
 }
 
 // ---------------------------------------------------------------------------
