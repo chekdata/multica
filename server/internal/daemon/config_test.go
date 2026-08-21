@@ -844,6 +844,7 @@ func TestLoadConfig_SkipsLoginShellWhenLookPathSucceeds(t *testing.T) {
 }
 
 func TestLoadConfig_UsesCodexDesktopAppBundleFallback(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	pathDir := t.TempDir()
 	fakeCodex := filepath.Join(pathDir, "Codex.app", "Contents", "Resources", "codex")
 	if err := os.MkdirAll(filepath.Dir(fakeCodex), 0o755); err != nil {
@@ -886,6 +887,7 @@ func TestLoadConfig_UsesCodexDesktopAppBundleFallback(t *testing.T) {
 // Multica must resolve the bundled CLI under ChatGPT.app (and prefer it over
 // the legacy Codex.app path when both exist).
 func TestLoadConfig_UsesChatGPTAppBundleCodexPath(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	pathDir := t.TempDir()
 	fakeChatGPT := filepath.Join(pathDir, "ChatGPT.app", "Contents", "Resources", "codex")
 	fakeLegacy := filepath.Join(pathDir, "Codex.app", "Contents", "Resources", "codex")
@@ -1138,6 +1140,82 @@ func TestOpenclawOverrideFrom_NavigationCases(t *testing.T) {
 	got := openclawOverrideFrom(cli.CLIConfig{Backends: &cli.BackendOverrides{OpenClaw: want}})
 	if got != want {
 		t.Errorf("happy path should return inner pointer; got %p want %p", got, want)
+	}
+}
+
+func TestApplyCodexOverride_EnvWinsOverConfig(t *testing.T) {
+	t.Setenv("MULTICA_CODEX_PATH", "/from/env/codex")
+
+	restore := applyCodexOverride(&cli.CodexOverride{BinaryPath: "/from/config/mcodex"})
+	restore()
+
+	if got := os.Getenv("MULTICA_CODEX_PATH"); got != "/from/env/codex" {
+		t.Errorf("MULTICA_CODEX_PATH: env should win, got %q", got)
+	}
+}
+
+func TestApplyCodexOverride_RestoresPreviouslyUnsetEnvironment(t *testing.T) {
+	os.Unsetenv("MULTICA_CODEX_PATH")
+	t.Cleanup(func() { os.Unsetenv("MULTICA_CODEX_PATH") })
+
+	restore := applyCodexOverride(&cli.CodexOverride{BinaryPath: "/from/config/mcodex"})
+	if got := os.Getenv("MULTICA_CODEX_PATH"); got != "/from/config/mcodex" {
+		t.Fatalf("MULTICA_CODEX_PATH during probe = %q", got)
+	}
+	restore()
+	if _, set := os.LookupEnv("MULTICA_CODEX_PATH"); set {
+		t.Fatal("MULTICA_CODEX_PATH should be restored to unset after probe")
+	}
+}
+
+func TestCodexOverrideFrom_NavigationCases(t *testing.T) {
+	if got := codexOverrideFrom(cli.CLIConfig{}); got != nil {
+		t.Errorf("nil Backends should produce nil override, got %+v", got)
+	}
+	if got := codexOverrideFrom(cli.CLIConfig{Backends: &cli.BackendOverrides{}}); got != nil {
+		t.Errorf("nil Codex inside Backends should produce nil override, got %+v", got)
+	}
+	want := &cli.CodexOverride{BinaryPath: "/x/mcodex"}
+	got := codexOverrideFrom(cli.CLIConfig{Backends: &cli.BackendOverrides{Codex: want}})
+	if got != want {
+		t.Errorf("happy path should return inner pointer; got %p want %p", got, want)
+	}
+}
+
+func TestLoadConfig_AppliesCodexOverrideFromConfigFile(t *testing.T) {
+	stageFakeAgent(t)
+	customDir := t.TempDir()
+	customCodex := filepath.Join(customDir, "mcodex")
+	if err := os.WriteFile(customCodex, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+
+	os.Unsetenv("MULTICA_CODEX_PATH")
+	t.Cleanup(func() { os.Unsetenv("MULTICA_CODEX_PATH") })
+	homeForCLIConfig := t.TempDir()
+	t.Setenv("HOME", homeForCLIConfig)
+	if err := cli.SaveCLIConfig(cli.CLIConfig{
+		ServerURL: "http://localhost:8080",
+		Backends: &cli.BackendOverrides{
+			Codex: &cli.CodexOverride{BinaryPath: customCodex},
+		},
+	}); err != nil {
+		t.Fatalf("save cli config: %v", err)
+	}
+
+	loaded, err := LoadConfig(Overrides{
+		ServerURL:      "http://localhost:8080",
+		WorkspacesRoot: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	codex, ok := loaded.Agents["codex"]
+	if !ok {
+		t.Fatalf("agents map missing codex; got keys=%v", agentKeys(loaded.Agents))
+	}
+	if codex.Path != customCodex {
+		t.Errorf("codex.Path: got %q, want %q", codex.Path, customCodex)
 	}
 }
 
