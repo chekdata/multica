@@ -452,6 +452,24 @@ SELECT EXISTS (
       AND created_at >= @since
 ) AS commented;
 
+-- name: HasAgentOutputCommentForTask :one
+-- A source-linked agent comment is durable proof that this run already
+-- delivered user-visible output. Failure reconciliation uses it to avoid
+-- duplicate retries and a misleading issue rollback after late task failure.
+-- Match the task's own issue/agent lineage and exclude generated system
+-- failure messages, which also carry source_task_id but are not agent output.
+SELECT EXISTS (
+    SELECT 1
+    FROM comment c
+    JOIN agent_task_queue t ON t.id = c.source_task_id
+    WHERE t.id = @source_task_id
+      AND t.issue_id IS NOT NULL
+      AND c.issue_id = t.issue_id
+      AND c.author_type = 'agent'
+      AND c.author_id = t.agent_id
+      AND c.type = 'comment'
+) AS delivered;
+
 -- name: HasAgentRepliedInThread :one
 -- Returns true if the given agent has posted a reply in the thread rooted at
 -- the specified parent comment. Used to detect agent participation in a
