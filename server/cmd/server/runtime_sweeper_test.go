@@ -104,6 +104,99 @@ func ageOutAgentRuntime(t *testing.T, agentID string, staleAgo time.Duration) {
 	})
 }
 
+func TestOfflineRuntimeReconnectInsideGracePreservesTask(t *testing.T) {
+	if testPool == nil {
+		t.Skip("no database connection")
+	}
+
+	ctx := context.Background()
+	issueID, agentID, taskID := setupSweeperTestFixture(t, "running")
+	t.Cleanup(func() { cleanupSweeperFixture(t, issueID, agentID) })
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `
+			UPDATE agent_runtime SET status = 'online', last_seen_at = now(), updated_at = now()
+			WHERE id = (SELECT runtime_id FROM agent WHERE id = $1)
+		`, agentID)
+	})
+
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_runtime SET status = 'offline', updated_at = now()
+		WHERE id = (SELECT runtime_id FROM agent WHERE id = $1)
+	`, agentID); err != nil {
+		t.Fatalf("mark runtime freshly offline: %v", err)
+	}
+
+	queries := db.New(testPool)
+	failed, err := queries.FailTasksForOfflineRuntimes(ctx, offlineRuntimeRecoveryGraceSeconds)
+	if err != nil {
+		t.Fatalf("FailTasksForOfflineRuntimes inside grace: %v", err)
+	}
+	for _, task := range failed {
+		if task.ID.Bytes == parseUUIDBytes(taskID) {
+			t.Fatalf("task %s failed before reconnect grace elapsed", taskID)
+		}
+	}
+
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_runtime SET status = 'online', last_seen_at = now(), updated_at = now()
+		WHERE id = (SELECT runtime_id FROM agent WHERE id = $1)
+	`, agentID); err != nil {
+		t.Fatalf("reconnect runtime: %v", err)
+	}
+	if _, err := queries.FailTasksForOfflineRuntimes(ctx, offlineRuntimeRecoveryGraceSeconds); err != nil {
+		t.Fatalf("FailTasksForOfflineRuntimes after reconnect: %v", err)
+	}
+
+	var status string
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status); err != nil {
+		t.Fatalf("load task after reconnect: %v", err)
+	}
+	if status != "running" {
+		t.Fatalf("task status after reconnect = %q, want running", status)
+	}
+}
+
+func TestOfflineRuntimeBeyondGraceFailsTask(t *testing.T) {
+	if testPool == nil {
+		t.Skip("no database connection")
+	}
+
+	ctx := context.Background()
+	issueID, agentID, taskID := setupSweeperTestFixture(t, "running")
+	t.Cleanup(func() { cleanupSweeperFixture(t, issueID, agentID) })
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `
+			UPDATE agent_runtime SET status = 'online', last_seen_at = now(), updated_at = now()
+			WHERE id = (SELECT runtime_id FROM agent WHERE id = $1)
+		`, agentID)
+	})
+
+	if _, err := testPool.Exec(ctx, `
+		UPDATE agent_runtime
+		SET status = 'offline', updated_at = now() - make_interval(secs => $1)
+		WHERE id = (SELECT runtime_id FROM agent WHERE id = $2)
+	`, offlineRuntimeRecoveryGraceSeconds+1, agentID); err != nil {
+		t.Fatalf("age offline runtime beyond grace: %v", err)
+	}
+
+	failed, err := db.New(testPool).FailTasksForOfflineRuntimes(ctx, offlineRuntimeRecoveryGraceSeconds)
+	if err != nil {
+		t.Fatalf("FailTasksForOfflineRuntimes beyond grace: %v", err)
+	}
+	found := false
+	for _, task := range failed {
+		if task.ID.Bytes == parseUUIDBytes(taskID) {
+			found = true
+			if !task.FailureReason.Valid || task.FailureReason.String != "runtime_offline" {
+				t.Fatalf("failure_reason = %v, want runtime_offline", task.FailureReason)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("task %s was not failed after reconnect grace elapsed", taskID)
+	}
+}
+
 func TestRefreshAgentStatusFromTasks(t *testing.T) {
 	if testPool == nil {
 		t.Skip("no database connection")
@@ -645,6 +738,98 @@ func TestSweepResetsInProgressIssueToTodo(t *testing.T) {
 	}
 	if issueStatus != "todo" {
 		t.Fatalf("expected issue status 'todo' after sweep, got '%s' — issue is stuck", issueStatus)
+	}
+}
+
+// TestSweepPreservesDeliveredAgentOutput verifies the late-failure consistency
+// contract: a source-linked agent comment is durable delivery evidence. The
+// task remains failed, but reconciliation must not enqueue a duplicate retry or
+// send the issue back to todo after the user-visible handoff already landed.
+func TestSweepPreservesDeliveredAgentOutput(t *testing.T) {
+	if testPool == nil {
+		t.Skip("no database connection")
+	}
+
+	ctx := context.Background()
+	issueID, agentID, taskID := setupSweeperTestFixture(t, "running")
+	t.Cleanup(func() { cleanupSweeperFixture(t, issueID, agentID) })
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM comment WHERE issue_id = $1`, issueID)
+	})
+
+	if _, err := testPool.Exec(ctx, `UPDATE issue SET status = 'in_progress' WHERE id = $1`, issueID); err != nil {
+		t.Fatalf("seed in_progress issue: %v", err)
+	}
+	queries := db.New(testPool)
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content, type, source_task_id)
+		VALUES ($1, $2, 'agent', $3, 'runtime went offline', 'system', $4)
+	`, issueID, testWorkspaceID, agentID, taskID); err != nil {
+		t.Fatalf("insert source-linked system failure: %v", err)
+	}
+	if delivered, err := queries.HasAgentOutputCommentForTask(ctx, parseUUID(taskID)); err != nil {
+		t.Fatalf("check system failure delivery evidence: %v", err)
+	} else if delivered {
+		t.Fatal("source-linked system failure was mistaken for delivered agent output")
+	}
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content, type, source_task_id)
+		VALUES ($1, $2, 'agent', $3, 'Delivered agent result', 'comment', $4)
+	`, issueID, testWorkspaceID, agentID, taskID); err != nil {
+		t.Fatalf("insert source-linked agent output: %v", err)
+	}
+	if delivered, err := queries.HasAgentOutputCommentForTask(ctx, parseUUID(taskID)); err != nil {
+		t.Fatalf("check agent output delivery evidence: %v", err)
+	} else if !delivered {
+		t.Fatal("source-linked agent output was not recognized as delivery evidence")
+	}
+
+	ageOutAgentRuntime(t, agentID, 10*time.Minute)
+	failedTasks, err := queries.FailStaleTasks(ctx, db.FailStaleTasksParams{
+		DispatchTimeoutSecs: 300.0,
+		RunningTimeoutSecs:  1.0,
+		RuntimeStaleSecs:    staleThresholdSeconds,
+	})
+	if err != nil {
+		t.Fatalf("FailStaleTasks: %v", err)
+	}
+	found := false
+	for _, task := range failedTasks {
+		if task.ID.Bytes == parseUUIDBytes(taskID) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected task %s in failed batch", taskID)
+	}
+
+	taskService := service.NewTaskService(queries, testPool, nil, events.New())
+	if retried := taskService.HandleFailedTasks(ctx, failedTasks); retried != 0 {
+		t.Fatalf("HandleFailedTasks retried %d task(s), want 0 after delivered output", retried)
+	}
+
+	var (
+		issueStatus string
+		retryCount  int
+		taskStatus  string
+	)
+	if err := testPool.QueryRow(ctx, `SELECT status FROM issue WHERE id = $1`, issueID).Scan(&issueStatus); err != nil {
+		t.Fatalf("load reconciled issue: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE retry_of_task_id = $1`, taskID).Scan(&retryCount); err != nil {
+		t.Fatalf("count retry children: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&taskStatus); err != nil {
+		t.Fatalf("load failed task: %v", err)
+	}
+	if issueStatus != "in_review" {
+		t.Fatalf("issue status = %q, want in_review", issueStatus)
+	}
+	if retryCount != 0 {
+		t.Fatalf("retry children = %d, want 0", retryCount)
+	}
+	if taskStatus != "failed" {
+		t.Fatalf("task status = %q, want failed", taskStatus)
 	}
 }
 
