@@ -207,6 +207,10 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		slog.Warn("could not load CLI config for backend overrides; proceeding without",
 			"profile", overrides.Profile, "err", err)
 	} else {
+		if codex := codexOverrideFrom(cliCfg); codex != nil {
+			restore := applyCodexOverride(codex)
+			defer restore()
+		}
 		if oc := openclawOverrideFrom(cliCfg); oc != nil {
 			applyOpenclawOverride(oc)
 		}
@@ -1009,6 +1013,27 @@ func openclawOverrideFrom(cfg cli.CLIConfig) *cli.OpenClawOverride {
 		return nil
 	}
 	return cfg.Backends.OpenClaw
+}
+
+func codexOverrideFrom(cfg cli.CLIConfig) *cli.CodexOverride {
+	if cfg.Backends == nil {
+		return nil
+	}
+	return cfg.Backends.Codex
+}
+
+// applyCodexOverride translates the persisted Codex path into the existing
+// environment-based probe contract. An explicitly exported environment value
+// remains authoritative for backward compatibility.
+func applyCodexOverride(codex *cli.CodexOverride) func() {
+	if codex == nil || codex.BinaryPath == "" {
+		return func() {}
+	}
+	if _, set := os.LookupEnv("MULTICA_CODEX_PATH"); set {
+		return func() {}
+	}
+	_ = os.Setenv("MULTICA_CODEX_PATH", codex.BinaryPath)
+	return func() { _ = os.Unsetenv("MULTICA_CODEX_PATH") }
 }
 
 // applyOpenclawOverride translates the config-file overrides into process

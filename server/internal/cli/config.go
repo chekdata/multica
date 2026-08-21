@@ -157,7 +157,19 @@ type CLIConfig struct {
 // Go's encoding/json drops fields that are not represented in this struct on
 // load/save round-trip (see TestCLIConfig_UnknownFieldsArePreserved).
 type BackendOverrides struct {
+	Codex    *CodexOverride    `json:"codex,omitempty"`
 	OpenClaw *OpenClawOverride `json:"openclaw,omitempty"`
+}
+
+// CodexOverride configures the Codex executable used by daemon starts on this
+// machine. Persisting the path closes the gap where an environment-only
+// MULTICA_CODEX_PATH override is lost after a manual daemon restart.
+//
+// Resolution precedence:
+//
+//	MULTICA_CODEX_PATH (env) > backends.codex.binary_path > PATH lookup
+type CodexOverride struct {
+	BinaryPath string `json:"binary_path,omitempty"`
 }
 
 // OpenClawOverride configures the OpenClaw backend. All fields are optional;

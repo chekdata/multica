@@ -59,6 +59,18 @@ type mockStorage struct {
 	presignDispositions []string
 }
 
+type failingUploadStorage struct{ mockStorage }
+
+func (m *failingUploadStorage) Upload(
+	_ context.Context,
+	_ string,
+	_ []byte,
+	_ string,
+	_ string,
+) (string, error) {
+	return "", fmt.Errorf("simulated object storage rejection")
+}
+
 func (m *mockStorage) Upload(_ context.Context, key string, data []byte, _ string, _ string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -230,6 +242,46 @@ func TestUploadFileForeignWorkspace(t *testing.T) {
 	testHandler.UploadFile(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("UploadFile with foreign workspace: expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestUploadFileStorageFailureReturnsDiagnosableGatewayError(t *testing.T) {
+	origStorage := testHandler.Storage
+	testHandler.Storage = &failingUploadStorage{}
+	defer func() { testHandler.Storage = origStorage }()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "test.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte("hello world")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("POST", "/api/upload-file", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-User-ID", testUserID)
+
+	w := httptest.NewRecorder()
+	testHandler.UploadFile(w, req)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("storage failure: expected 502, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var response map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response["code"] != "storage_upload_failed" {
+		t.Fatalf("storage failure code: got %q", response["code"])
+	}
+	if strings.Contains(response["error"], "simulated object storage rejection") {
+		t.Fatalf("storage error leaked internal details: %q", response["error"])
 	}
 }
 
