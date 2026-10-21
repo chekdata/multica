@@ -586,13 +586,18 @@ function pricingCandidates(model: string, provider?: string): string[] {
 // `claude-opus-4-8[context=1m,effort=high,fast=true]`.
 const CURSOR_VARIANT_SUFFIX = /-(?:fast|thinking|none|minimal|low|medium|high|xhigh|extra-high|max)$/;
 
+function trailingBracketStart(value: string): number {
+  if (!value.endsWith("]")) return -1;
+  return value.indexOf("[", value.lastIndexOf("]", value.length - 2) + 1);
+}
+
 function cursorBaseModel(model: string): { base: string; fast: boolean } {
   let id = model.trim().toLowerCase();
   let fast = false;
-  const params = id.match(/\[([^\]]*)\]$/);
-  if (params) {
-    fast = /(?:^|,)\s*fast\s*=\s*true\s*(?:,|$)/.test(params[1] ?? "");
-    id = id.slice(0, params.index);
+  const paramsStart = trailingBracketStart(id);
+  if (paramsStart >= 0) {
+    fast = /(?:^|,)\s*fast\s*=\s*true\s*(?:,|$)/.test(id.slice(paramsStart + 1, -1));
+    id = id.slice(0, paramsStart);
   }
   for (let m = id.match(CURSOR_VARIANT_SUFFIX); m; m = id.match(CURSOR_VARIANT_SUFFIX)) {
     if (m[0] === "-fast") fast = true;
@@ -699,7 +704,10 @@ function canonicalCandidates(model: string): string[] {
   // Trailing context-window tag (`claude-opus-4-7[1m]`). Same family,
   // same price tier — see resolver comment above for the 1M-context
   // pricing trade-off.
-  const stripContextTag = (s: string) => s.replace(/\[[^\]]+\]$/, "");
+  const stripContextTag = (s: string) => {
+    const start = trailingBracketStart(s);
+    return start >= 0 && start < s.length - 2 ? s.slice(0, start) : s;
+  };
 
   // Antigravity's display labels and effort-suffixed IDs refer to the same
   // Gemini SKU. Match only recognized shapes; never strip arbitrary variants.

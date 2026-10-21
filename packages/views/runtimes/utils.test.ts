@@ -1950,3 +1950,7 @@ describe("formatTokens", () => {
     expect(formatTokens(999_999_999)).toBe("1B");
   });
 });
+
+it("handles long unmatched model parameter delimiters", () => {
+  expect(isModelPriced("claude-" + "[".repeat(50000), "cursor")).toBe(false);
+});

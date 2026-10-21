@@ -16,18 +16,29 @@
  */
 export function preprocessMentionShortcodes(text: string): string {
   if (!text.includes("[@ ")) return text;
-  return text.replace(
-    /\[@\s([^\]]*)\]/g,
-    (match, attrString: string) => {
-      const attrs: Record<string, string> = {};
-      const re = /\b(\w+)="([^"]*)"/g;
-      let m;
-      while ((m = re.exec(attrString)) !== null) {
-        if (m[1] && m[2] !== undefined) attrs[m[1]] = m[2];
-      }
-      const { id, label } = attrs;
-      if (!id || !label) return match;
-      return `[@${label}](mention://member/${id})`;
-    },
-  );
+  const parts: string[] = [];
+  let cursor = 0;
+  let copied = 0;
+  while (cursor < text.length) {
+    const start = text.indexOf("[@", cursor);
+    if (start < 0) break;
+    cursor = start + 2;
+    if (!/\s/.test(text[cursor] ?? "")) continue;
+    const end = text.indexOf("]", cursor + 1);
+    if (end < 0) break;
+    const attrs: Record<string, string> = {};
+    const re = /\b(\w+)="([^"]*)"/g;
+    const attrString = text.slice(cursor + 1, end);
+    let match;
+    while ((match = re.exec(attrString)) !== null) {
+      if (match[1] && match[2] !== undefined) attrs[match[1]] = match[2];
+    }
+    if (attrs.id && attrs.label) {
+      parts.push(text.slice(copied, start), `[@${attrs.label}](mention://member/${attrs.id})`);
+      copied = end + 1;
+    }
+    cursor = end + 1;
+  }
+  parts.push(text.slice(copied));
+  return parts.join("");
 }

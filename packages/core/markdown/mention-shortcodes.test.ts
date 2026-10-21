@@ -9,3 +9,8 @@ it("preserves an unterminated mention with a long whitespace run", () => {
   const text = "[@ " + " ".repeat(100000);
   expect(preprocessMentionShortcodes(text)).toBe(text);
 });
+
+it("handles repeated unterminated mention openings", () => {
+  const text = "[@ ".repeat(30000);
+  expect(preprocessMentionShortcodes(text)).toBe(text);
+});
