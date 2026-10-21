@@ -1909,8 +1909,8 @@ func issueNumberForPrefix(identifier, prefix string) (int32, bool) {
 	if !strings.EqualFold(gotPrefix, prefix) {
 		return 0, false
 	}
-	n, err := strconv.Atoi(numStr)
-	if err != nil {
+	n, err := strconv.ParseInt(numStr, 10, 32)
+	if err != nil || n <= 0 {
 		return 0, false
 	}
 	return int32(n), true

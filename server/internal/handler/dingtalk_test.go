@@ -998,6 +998,20 @@ INSERT INTO dingtalk_group_presence (
 	}
 }
 
+func TestListDingTalkGroupsRejectsOffsetOverflow(t *testing.T) {
+	for _, offset := range []string{"2147483648", "4294967296", "-1"} {
+		t.Run(offset, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet,
+				"/api/dingtalk/groups?activity=inactive&installation_id=d1473000-0000-4000-8000-000000000099&offset="+offset, nil)
+			rec := httptest.NewRecorder()
+			(&Handler{}).listDingTalkGroups(rec, req, parseUUID("d1473000-0000-4000-8000-000000000001"), "", nil)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestListDingTalkGroupsDisabledDeploymentReturnsStableEmptyShape(t *testing.T) {
 	rec := httptest.NewRecorder()
 	(&Handler{}).ListDingTalkGroups(rec, httptest.NewRequest(http.MethodGet, "/api/workspaces/bad/dingtalk/groups", nil))

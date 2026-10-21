@@ -29,6 +29,28 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+func TestIssueNumberForPrefixRejectsOverflow(t *testing.T) {
+	for _, tc := range []struct {
+		identifier string
+		want       int32
+		ok         bool
+	}{
+		{"MUL-1", 1, true},
+		{"mul-2147483647", 2147483647, true},
+		{"MUL-2147483648", 0, false},
+		{"MUL-4294967297", 0, false},
+		{"MUL-0", 0, false},
+		{"OTHER-1", 0, false},
+	} {
+		t.Run(tc.identifier, func(t *testing.T) {
+			got, ok := issueNumberForPrefix(tc.identifier, "MUL")
+			if got != tc.want || ok != tc.ok {
+				t.Fatalf("issueNumberForPrefix = (%d, %v), want (%d, %v)", got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
 func TestExtractIdentifiers(t *testing.T) {
 	cases := []struct {
 		name string
