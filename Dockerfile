@@ -26,7 +26,8 @@ RUN cd server && CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/backfill_codex_u
 # --- Runtime stage ---
 FROM alpine:3.21
 
-RUN apk add --no-cache ca-certificates tzdata
+# Require the patched OpenSSL packages even when the base image is cached.
+RUN apk add --no-cache ca-certificates tzdata "libcrypto3>=3.3.7-r2" "libssl3>=3.3.7-r2"
 
 WORKDIR /app
 
