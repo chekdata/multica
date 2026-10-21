@@ -233,3 +233,10 @@ describe("location bridge runtime", () => {
     expect(window.location.search + window.location.hash).toBe("?s=a#section");
   });
 });
+
+it("prepends the bridge to long comment sequences without a doctype", () => {
+  const html = "<!-- comment -->".repeat(20000);
+  const output = withLocationBridge(html, "");
+  expect(output.startsWith("<script>")).toBe(true);
+  expect(output.endsWith(html)).toBe(true);
+});

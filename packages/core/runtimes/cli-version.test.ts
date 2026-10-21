@@ -152,3 +152,7 @@ describe("runtimeAdvertisesLocalWorktree", () => {
     expect(runtimeAdvertisesLocalWorktree(other, null)).toBe(false);
   });
 });
+
+it("rejects a long digit sequence without repeatedly parsing its suffixes", () => {
+  expect(checkQuickCreateCliVersion("9".repeat(100000)).state).toBe("missing");
+});

@@ -85,16 +85,19 @@ export interface ListQuickActionsResponse {
 export const QUICK_ACTION_SIDEBAR_LIMIT = 5;
 
 /**
- * Matches any `{{...}}`, mirroring the server's write-time rejection.
- *
- * Templating is not supported: every variable considered named something the
- * agent already had from the issue context. The check survives the feature so
- * a habitual token cannot land literally in an agent's instructions — the form
- * shows it inline instead of waiting for a 400.
+ * The first template token in a prompt, or null when there is none.
+ * Templating is unsupported; mirror the server's rejection without repeatedly
+ * scanning a suffix for each unmatched opening delimiter.
  */
-export const QUICK_ACTION_TEMPLATE_TOKEN_RE = /\{\{[^}]*\}\}/;
-
-/** The first template token in a prompt, or null when there is none. */
 export function findQuickActionTemplateToken(prompt: string): string | null {
-  return prompt.match(QUICK_ACTION_TEMPLATE_TOKEN_RE)?.[0] ?? null;
+  let cursor = 0;
+  while (cursor < prompt.length) {
+    const start = prompt.indexOf("{{", cursor);
+    if (start < 0) return null;
+    const end = prompt.indexOf("}", start + 2);
+    if (end < 0) return null;
+    if (prompt[end + 1] === "}") return prompt.slice(start, end + 2);
+    cursor = end + 1;
+  }
+  return null;
 }

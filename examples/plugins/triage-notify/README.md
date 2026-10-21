@@ -31,7 +31,9 @@ else's server was slow.
 ```bash
 # The signing secret is shown once, next to the install token, when an admin
 # rotates the plugin's token in workspace settings.
-MULTICA_SIGNING_SECRET=whsec_… node server/handler.mjs
+MULTICA_SIGNING_SECRET=whsec_… \
+MULTICA_CALLBACK_URL=https://your-multica-host/v1 \
+node server/handler.mjs
 ```
 
 `server/handler.mjs` is the interesting file if you are writing a plugin. It
@@ -53,6 +55,11 @@ shows the four things a handler must do and one the host cannot do for you:
 Each request carries a `callback_token` and a `callback_url`. The token is
 scoped to that one invocation and expires in minutes — spend it on the work at
 hand rather than storing it.
+
+Set `MULTICA_CALLBACK_URL` to the exact callback base configured by your trusted
+Multica deployment. The example rejects other destinations and redirects before
+sending a callback credential. Confirm the deployment's callback path; the value
+above is illustrative.
 
 You do not choose what identity the callback writes as. That was decided when
 the hook was dispatched: a `ui`/`manual` call writes as the person who triggered

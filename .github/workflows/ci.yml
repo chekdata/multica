@@ -889,6 +889,9 @@ jobs:
         with:
           node-version: 22
 
+      - name: Test plugin callback destination validation
+        run: node --test examples/plugins/triage-notify/server/callback.test.mjs
+
       - name: Test self-host env derivation
         run: bash scripts/selfhost-config.test.sh
 

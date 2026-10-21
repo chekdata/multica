@@ -80,7 +80,19 @@ export function __locationBridgeScript__(initialAddress: string): string {
 
 // A doctype must stay the first thing in the document or it renders in quirks
 // mode; comments may precede it.
-const LEADING_DOCTYPE_RE = /^\s*(?:<!--[\s\S]*?-->\s*)*<!doctype[^>]*>/i;
+function leadingDoctypeEnd(html: string): number {
+  let cursor = 0;
+  while (true) {
+    while (cursor < html.length && /\s/.test(html[cursor]!)) cursor++;
+    if (!html.startsWith("<!--", cursor)) break;
+    const end = html.indexOf("-->", cursor + 4);
+    if (end < 0) return 0;
+    cursor = end + 3;
+  }
+  if (html.slice(cursor, cursor + 9).toLowerCase() !== "<!doctype") return 0;
+  const end = html.indexOf(">", cursor + 9);
+  return end < 0 ? 0 : end + 1;
+}
 
 /**
  * The document with the bridge in front of the author's markup (after a
@@ -88,8 +100,8 @@ const LEADING_DOCTYPE_RE = /^\s*(?:<!--[\s\S]*?-->\s*)*<!doctype[^>]*>/i;
  */
 export function withLocationBridge(html: string, initialAddress: string): string {
   const prefix = `<script>${buildScript(initialAddress)}</script>`;
-  const doctype = LEADING_DOCTYPE_RE.exec(html)?.[0];
-  return doctype ? doctype + prefix + html.slice(doctype.length) : prefix + html;
+  const end = leadingDoctypeEnd(html);
+  return html.slice(0, end) + prefix + html.slice(end);
 }
 
 /**

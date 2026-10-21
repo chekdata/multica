@@ -357,3 +357,9 @@ describe("completed builder reply recovery", () => {
       .toEqual(parseBuilderDraft(`${reply}</agent_draft>`));
   });
 });
+
+it("handles repeated incomplete draft delimiters", () => {
+  const content = "Intro " + "<agent_draft>".repeat(20000);
+  expect(parseBuilderDraft(content)).toBeNull();
+  expect(stripBuilderDraft(content)).toBe("Intro");
+});

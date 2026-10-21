@@ -355,3 +355,8 @@ describe("indexOfImageKey", () => {
     expect(indexOfImageKey(items, "")).toBe(-1);
   });
 });
+
+it("masks matched backtick runs and keeps images after unmatched runs", () => {
+  expect(collectImageSequence([{content: "Text " + "`".repeat(100000) + " ![real](https://cdn/yes.png)"}]).map((image) => image.key)).toEqual(["https://cdn/yes.png"]);
+  expect(collectImageSequence([{content: "Text ``![hidden](https://cdn/no.png)`` ![real](https://cdn/yes.png)"}]).map((image) => image.key)).toEqual(["https://cdn/yes.png"]);
+});

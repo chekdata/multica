@@ -74,6 +74,7 @@
     ".github/ci-paths.json"
   ],
   "scripts": [
+    "examples/plugins/triage-notify/server/**",
     "scripts/generate-reserved-slugs.mjs",
     "scripts/selfhost-config.test.sh",
     "scripts/drop-database.sh",

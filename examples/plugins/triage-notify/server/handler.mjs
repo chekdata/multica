@@ -18,15 +18,19 @@ import { createServer as createHTTPServer } from "node:http";
 import { createServer as createHTTPSServer } from "node:https";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { createCallbackClient } from "./callback.mjs";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const SIGNING_SECRET = process.env.MULTICA_SIGNING_SECRET ?? "";
+const CALLBACK_URL = process.env.MULTICA_CALLBACK_URL ?? "";
 const TOLERANCE_SECONDS = 5 * 60;
 
 if (!SIGNING_SECRET) {
   console.error("MULTICA_SIGNING_SECRET is required. Rotate the plugin token in Multica to obtain it.");
   process.exit(1);
 }
+
+const callback = createCallbackClient(CALLBACK_URL);
 
 /**
  * Replay protection, the half the host cannot do for you.
@@ -71,31 +75,6 @@ function verify(rawBody, headers) {
 
   if (!rememberSignature(presented, Date.now())) return "this request was already delivered";
   return null;
-}
-
-/**
- * Calls Multica back using the one-shot token that arrived with the request.
- *
- * The token is scoped to this invocation and expires in minutes, so it is worth
- * spending on the work at hand rather than storing. It is good for as many calls
- * as the job needs — reading the issue and then commenting on it is two, which
- * is the floor for a handler that does anything with what it read. Which identity the writes
- * land under was decided when the hook was dispatched: a ui/manual call writes
- * as the person who triggered it, an event call writes as the plugin.
- */
-async function callback(body, method, path, payload) {
-  const response = await fetch(`${body.callback_url}${path}`, {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${body.callback_token}`,
-    },
-    body: payload === undefined ? undefined : JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    throw new Error(`Multica answered ${response.status}: ${await response.text()}`);
-  }
-  return response.json();
 }
 
 /** Stand-in for whatever the author's real triage service does. */

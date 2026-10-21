@@ -148,3 +148,9 @@ describe("looksLikeCommitSha", () => {
     expect(looksLikeCommitSha(sha)).toBe(true);
   });
 });
+
+it("trims a long trailing slash run from a pasted branch URL", () => {
+  expect(splitGithubUrlRef("https://github.com/acme/repo/tree/main" + "/".repeat(100000))).toEqual({
+    url: "https://github.com/acme/repo", ref: "main",
+  });
+});

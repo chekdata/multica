@@ -108,3 +108,8 @@ describe("isIssueIdentifier", () => {
     expect(isIssueIdentifier("MUL1")).toBe(false);
   });
 });
+
+it("leaves a long word without an issue-number suffix unchanged", () => {
+  const text = "A".repeat(100000);
+  expect(preprocessIssueIdentifiers(text)).toBe(text);
+});

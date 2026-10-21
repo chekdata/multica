@@ -213,7 +213,28 @@ function maskCode(content: string): string {
       lines[i] = blankOut(line);
       continue;
     }
-    lines[i] = line.replace(/(`+)[^`\n]*?\1/g, blankOut);
+    const runs = [...line.matchAll(/`+/g)];
+    const nextByLength = new Map<number, number>();
+    const closingRuns = new Map<number, number>();
+    for (let j = runs.length - 1; j >= 0; j--) {
+      const length = runs[j]![0].length;
+      const next = nextByLength.get(length);
+      if (next !== undefined) closingRuns.set(j, next);
+      nextByLength.set(length, j);
+    }
+    const parts: string[] = [];
+    let cursor = 0;
+    for (let j = 0; j < runs.length; j++) {
+      const closing = closingRuns.get(j);
+      if (closing === undefined) continue;
+      const start = runs[j]!.index;
+      const end = runs[closing]!.index + runs[closing]![0].length;
+      parts.push(line.slice(cursor, start), blankOut(line.slice(start, end)));
+      cursor = end;
+      j = closing;
+    }
+    parts.push(line.slice(cursor));
+    lines[i] = parts.join("");
   }
   return lines.join("\n");
 }

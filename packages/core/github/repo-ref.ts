@@ -120,7 +120,9 @@ export function splitGithubUrlRef(input: string): { url: string; ref?: string } 
   );
   const [, cloneUrl, rawRef] = match ?? [];
   if (!cloneUrl || !rawRef) return { url: value };
-  const ref = rawRef.replace(/\/+$/, "");
+  let end = rawRef.length;
+  while (end > 0 && rawRef[end - 1] === "/") end--;
+  const ref = rawRef.slice(0, end);
   if (!ref || validateGitRef(ref).ok === false) return { url: value };
   return { url: cloneUrl, ref };
 }

@@ -23,7 +23,7 @@ export interface CliVersionCheck {
   min: string;
 }
 
-const SEMVER_RE = /v?(\d+)\.(\d+)\.(\d+)/;
+const SEMVER_RE = /(?<!\d)v?(\d+)\.(\d+)\.(\d+)/;
 
 // Matches the `git describe --tags --always --dirty` output for a build past
 // the latest tag, e.g. `v0.2.15-235-gdaf0e935` or `v0.2.15-235-gdaf0e935-dirty`.

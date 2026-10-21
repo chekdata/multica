@@ -107,7 +107,7 @@ export class WSClient {
         return;
       }
 
-      this.onAuthenticated();
+      this.onConnectionReady();
     };
 
     this.ws.onmessage = (event) => {
@@ -141,7 +141,7 @@ export class WSClient {
         return;
       }
       if ((msg as any).type === "auth_ack") {
-        this.onAuthenticated();
+        this.onConnectionReady();
         return;
       }
       this.logger.debug("received", msg.type);
@@ -190,7 +190,8 @@ export class WSClient {
     this.reconnectTimer = setTimeout(() => this.connect(), delay);
   }
 
-  private onAuthenticated() {
+  // Connection bookkeeping only. The server enforces authentication and permissions.
+  private onConnectionReady() {
     this.logger.info("connected");
     const recoveredConnection = this.hasConnectedBefore || this.reconnectAttempt > 0;
     this.reconnectAttempt = 0;
