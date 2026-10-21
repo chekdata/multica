@@ -10,7 +10,10 @@ formulae, and container images.
 The verification job runs the Go tests and `govulncheck` before any publishing
 job starts. The vulnerability scan is fail-closed by default.
 
-CI and release jobs require Go `~1.26.9`: at least 1.26.9, while accepting
+CHEK production promotion also runs govulncheck before publishing images.
+The 1.26.10 floor fixes [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809).
+
+CI and release jobs require Go `~1.26.10`: at least 1.26.10, while accepting
 newer 1.26 patches. This security floor is independent of the development
 minimum in `server/go.mod`. A plain `1.26.x` can resolve to an older patch
 while the `setup-go` version manifest catches up with an official Go release.

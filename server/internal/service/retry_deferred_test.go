@@ -392,8 +392,10 @@ func TestFailTaskProviderCapacityRetry(t *testing.T) {
 		"429 Too Many Requests",
 		sourceSession,
 		sourceWorkDir,
+		"",
 		reason,
 		false,
+		"",
 		"",
 	); err != nil {
 		t.Fatalf("FailTask: %v", err)

@@ -89,6 +89,17 @@ jobs:
             echo "commit_date=$(git show -s --format=%cI HEAD)"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Set up secure Go toolchain
+        uses: actions/setup-go@v5
+        with:
+          go-version: "~1.26.10"
+          check-latest: true
+          cache-dependency-path: server/go.sum
+
+      - name: Verify reachable Go vulnerabilities before promotion
+        working-directory: server
+        run: go tool govulncheck ./...
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
