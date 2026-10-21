@@ -618,6 +618,50 @@ type CommentReaction struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type CompanyCodexKey struct {
+	ID               pgtype.UUID        `json:"id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	UserID           pgtype.UUID        `json:"user_id"`
+	GatewayKeyID     string             `json:"gateway_key_id"`
+	GatewayKeyPrefix string             `json:"gateway_key_prefix"`
+	Status           string             `json:"status"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	RevokedAt        pgtype.Timestamptz `json:"revoked_at"`
+}
+
+type CompanyCodexSession struct {
+	ID                pgtype.UUID        `json:"id"`
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	UserID            pgtype.UUID        `json:"user_id"`
+	GatewayKeyID      string             `json:"gateway_key_id"`
+	ClientSessionID   string             `json:"client_session_id"`
+	ClientThreadID    pgtype.Text        `json:"client_thread_id"`
+	Title             pgtype.Text        `json:"title"`
+	Model             pgtype.Text        `json:"model"`
+	Status            string             `json:"status"`
+	InputTokens       int64              `json:"input_tokens"`
+	OutputTokens      int64              `json:"output_tokens"`
+	CachedInputTokens int64              `json:"cached_input_tokens"`
+	StartedAt         pgtype.Timestamptz `json:"started_at"`
+	LastActivityAt    pgtype.Timestamptz `json:"last_activity_at"`
+}
+
+type CompanyCodexTurn struct {
+	ID                pgtype.UUID        `json:"id"`
+	SessionID         pgtype.UUID        `json:"session_id"`
+	RequestID         string             `json:"request_id"`
+	Prompt            string             `json:"prompt"`
+	Response          string             `json:"response"`
+	Model             pgtype.Text        `json:"model"`
+	Status            string             `json:"status"`
+	InputTokens       int64              `json:"input_tokens"`
+	OutputTokens      int64              `json:"output_tokens"`
+	CachedInputTokens int64              `json:"cached_input_tokens"`
+	StartedAt         pgtype.Timestamptz `json:"started_at"`
+	CompletedAt       pgtype.Timestamptz `json:"completed_at"`
+}
+
 type ContactSalesInquiry struct {
 	ID              pgtype.UUID        `json:"id"`
 	FirstName       string             `json:"first_name"`
