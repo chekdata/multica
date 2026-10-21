@@ -22,11 +22,17 @@ It does not create issues. That is a later Plugin Action API, not this trigger.
 ## Running the handler
 
 ```bash
-MULTICA_SIGNING_SECRET=whsec_… node server/handler.mjs
+MULTICA_SIGNING_SECRET=whsec_… \
+MULTICA_CALLBACK_URL=https://multica.example/api/v1 \
+node server/handler.mjs
 ```
 
 The signing secret is shown once, next to the install token, when an admin
 rotates the plugin's token in workspace settings.
+
+Set `MULTICA_CALLBACK_URL` to the trusted HTTPS callback base for your Multica
+deployment, without a trailing slash. The handler rejects other callback URLs
+and redirects before forwarding the callback token.
 
 Point `transport.url` at this process and declare the matching `net:` scope.
 Local development also needs:

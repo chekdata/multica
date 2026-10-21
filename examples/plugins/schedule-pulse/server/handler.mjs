@@ -10,9 +10,11 @@ import { createServer as createHTTPServer } from "node:http";
 import { createServer as createHTTPSServer } from "node:https";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { createCallbackClient } from "./callback.mjs";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const SIGNING_SECRET = process.env.MULTICA_SIGNING_SECRET ?? "";
+const CALLBACK_URL = process.env.MULTICA_CALLBACK_URL ?? "";
 const TOLERANCE_SECONDS = 5 * 60;
 const PULSE_KEY = "last_pulse";
 
@@ -55,22 +57,7 @@ function verify(rawBody, headers) {
   return null;
 }
 
-async function callback(body, method, path, payload) {
-  const response = await fetch(`${body.callback_url}${path}`, {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${body.callback_token}`,
-    },
-    body: payload === undefined ? undefined : JSON.stringify(payload),
-  });
-  const text = await response.text();
-  if (response.status === 404) return null;
-  if (!response.ok) {
-    throw new Error(`Multica answered ${response.status}: ${text}`);
-  }
-  return text ? JSON.parse(text) : null;
-}
+const callback = createCallbackClient(CALLBACK_URL);
 
 async function loadPulse(body) {
   const stored = await callback(body, "GET", `/storage/workspace/${PULSE_KEY}`);
