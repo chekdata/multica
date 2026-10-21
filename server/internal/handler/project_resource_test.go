@@ -219,6 +219,7 @@ func TestIsValidGitRepoURL(t *testing.T) {
 		"ssh://git@github.com:22/multica-ai/multica.git",
 		"git@github.com:multica-ai/multica.git",
 		"git@gitlab.example.com:group/sub/repo.git",
+		"ssh://git@[::1]:22/group/repo.git",
 	}
 	bad := []string{
 		"",
@@ -231,9 +232,14 @@ func TestIsValidGitRepoURL(t *testing.T) {
 		"ftp://example.com/repo",        // unsupported scheme
 		"file:///tmp/repo",              // unsupported scheme
 		"some random text with spaces",
-		"github.com:org/repo@branch", // '@' after ':' belongs to the path, not user
-		"foo:bar@baz",                // '@' after ':' with no scheme
-		":foo/bar",                   // leading ':' with no host
+		"github.com:org/repo@branch",         // '@' after ':' belongs to the path, not user
+		"foo:bar@baz",                        // '@' after ':' with no scheme
+		":foo/bar",                           // leading ':' with no host
+		"--upload-pack=git-upload-pack:repo", // a Git option, not an SSH hostname
+		"ext::helper",                        // remote-helper syntax, not scp syntax
+		"git@-oProxyCommand=helper:repo",
+		"ssh://git@-option/group/repo",
+		"git@github.com:group/repo\nextra",
 	}
 	for _, s := range good {
 		if !isValidGitRepoURL(s) {

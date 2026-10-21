@@ -468,7 +468,13 @@ func validateGitRef(ref string) error {
 // grammar — because the actual fetch happens client-side via `git clone` and
 // the user gets a clearer error from git than from us.
 func isValidGitRepoURL(s string) bool {
+	if strings.HasPrefix(s, "-") || strings.ContainsAny(s, "\r\n\t\x00") {
+		return false
+	}
 	if u, err := url.Parse(s); err == nil && u.Host != "" {
+		if strings.HasPrefix(u.Hostname(), "-") {
+			return false
+		}
 		switch u.Scheme {
 		case "http", "https", "ssh", "git":
 			return true
@@ -477,7 +483,7 @@ func isValidGitRepoURL(s string) bool {
 	// scp-like ssh shorthand: [user@]host:path with a non-empty host and path,
 	// and no spaces. Reject anything that looks like a URL with a scheme
 	// (those should go through url.Parse above).
-	if strings.Contains(s, " ") || strings.Contains(s, "://") {
+	if strings.Contains(s, " ") || strings.Contains(s, "://") || strings.Contains(s, "::") {
 		return false
 	}
 	colon := strings.Index(s, ":")
@@ -498,7 +504,7 @@ func isValidGitRepoURL(s string) bool {
 	}
 	host := s[hostStart:colon]
 	path := s[colon+1:]
-	if host == "" || path == "" {
+	if host == "" || path == "" || strings.HasPrefix(host, "-") {
 		return false
 	}
 	return true

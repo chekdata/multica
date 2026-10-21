@@ -593,7 +593,7 @@ func gitCloneBare(url, dest string) error {
 }
 
 func gitCloneBareContext(ctx context.Context, url, dest string) error {
-	if out, err := runGitCombinedOutputContext(ctx, "clone", "--bare", url, dest); err != nil {
+	if out, err := runGitCombinedOutputContext(ctx, "clone", "--bare", "--", url, dest); err != nil {
 		// Clean up partial clone.
 		os.RemoveAll(dest)
 		return fmt.Errorf("git clone --bare: %s: %w", strings.TrimSpace(string(out)), err)
