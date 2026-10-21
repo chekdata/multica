@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -8,25 +8,32 @@ import {
   ArrowUp,
   Calendar,
   CalendarClock,
+  CircleEqual,
   ExternalLink,
   FolderOpen,
   Link2,
   Network,
   Pin,
   PinOff,
+  Pencil,
   Plus,
   Trash2,
   Unlink,
   UserMinus,
 } from "lucide-react";
-import type { AgentTask, Issue } from "@multica/core/types";
+import type { Issue } from "@multica/core/types";
+import { resolveWorkdirCopyTarget } from "@multica/core/issues";
 import { todayDateOnly, addDaysDateOnly } from "@multica/core/issues/date";
 import { api } from "@multica/core/api";
 import {
-  ALL_STATUSES,
   PRIORITY_DISPLAY_ORDER,
   PRIORITY_CONFIG,
 } from "@multica/core/issues/config";
+import { useWorkspaceId } from "@multica/core/hooks";
+import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
+import { stepHandsOff, workflowAllowsStatus, workflowStep } from "@multica/core/issue-workflows";
+import { useModalStore } from "@multica/core/modals";
+import { useIssueStatusOptions } from "../utils/status-options";
 import { issueKeys } from "@multica/core/issues/queries";
 import { StatusIcon } from "../components/status-icon";
 import { PriorityIcon } from "../components/priority-icon";
@@ -46,6 +53,7 @@ import {
 } from "@multica/ui/components/ui/context-menu";
 import { copyText } from "@multica/ui/lib/clipboard";
 import type { UseIssueActionsResult } from "./use-issue-actions";
+import { PluginHookMenuItems, PluginModalMenuItems } from "../../plugins";
 import { useT } from "../../i18n";
 
 // Both Dropdown and Context menu wrappers expose an API-compatible surface
@@ -102,6 +110,19 @@ export function IssueActionsMenuItems({
   onDeletedFallbackPath,
 }: IssueActionsMenuItemsProps) {
   const { t } = useT("issues");
+  const wsId = useWorkspaceId();
+  // Only the statuses the issue's workflow allows; entering a step that hands
+  // the issue off confirms first, as in the status picker. (MUL-7420)
+  const { options: statusOptions, workflow } = useIssueStatusOptions(wsId, issue.project_id);
+  const openModal = useModalStore((s) => s.open);
+  const setStatus = (status: string) => {
+    if (workflow && status !== issue.status && stepHandsOff(workflowStep(workflow, status))) {
+      openModal("issue-workflow-handoff", { issueId: issue.id, identifier: issue.identifier, status });
+      return;
+    }
+    updateField({ status });
+  };
+  const { categoryOf, colorOf, iconOf } = useIssueStatuses(wsId);
   const {
     isPinned,
     updateField,
@@ -109,9 +130,11 @@ export function IssueActionsMenuItems({
     togglePin,
     copyLink,
     openCreateSubIssue,
+    openRename,
     openSetParent,
     removeParent,
     openAddChild,
+    openMarkDuplicate,
     openDeleteConfirm,
   } = actions;
 
@@ -128,6 +151,10 @@ export function IssueActionsMenuItems({
     queryFn: () => api.listTasksByIssue(issue.id),
     staleTime: 30_000,
   });
+  const workdirCopyTarget = useMemo(
+    () => resolveWorkdirCopyTarget(tasks),
+    [tasks],
+  );
 
   // Synchronous click handler — the awaited fetch in the previous version
   // dropped the browser's transient user activation, which made
@@ -135,31 +162,71 @@ export function IssueActionsMenuItems({
   // was cold. We now read straight from the cached query result and write
   // to the clipboard inside the same task as the click.
   const handleCopyWorkdirPath = useCallback(() => {
-    const latestWorkDir = pickLatestWorkDir(tasks);
-    if (!latestWorkDir) {
+    if (!workdirCopyTarget) {
       toast.error(t(($) => $.detail.workdir_path_unavailable));
       return;
     }
-    void copyText(latestWorkDir).then((ok) => {
-      if (ok) toast.success(t(($) => $.detail.workdir_path_copied));
-      else toast.error(t(($) => $.detail.workdir_path_copy_failed));
+    void copyText(workdirCopyTarget.path).then((ok) => {
+      if (!ok) {
+        toast.error(t(($) => $.detail.workdir_path_copy_failed));
+        return;
+      }
+      if (workdirCopyTarget.source === "durable_project_directory") {
+        toast.success(
+          workdirCopyTarget.branchName
+            ? t(($) => $.detail.project_directory_path_copied_with_branch, {
+                branch: workdirCopyTarget.branchName,
+              })
+            : t(($) => $.detail.project_directory_path_copied),
+        );
+        return;
+      }
+      toast.success(t(($) => $.detail.workdir_path_copied));
     });
-  }, [tasks, t]);
+  }, [workdirCopyTarget, t]);
 
   return (
     <>
+      {/* Rename leads the menu: it is the only entry that changes what the
+          issue *is* rather than a property of it, and on list/board rows it is
+          the only way to reach the title at all. */}
+      <P.Item onClick={openRename}>
+        <Pencil className="h-3.5 w-3.5" />
+        {t(($) => $.actions.rename_issue)}
+      </P.Item>
+
+      <P.Separator />
+
       {/* Status */}
       <P.Sub>
         <P.SubTrigger>
-          <StatusIcon status={issue.status} className="h-3.5 w-3.5" />
+          <StatusIcon
+            status={issue.status}
+            category={categoryOf(issue.status)}
+            color={colorOf(issue.status)}
+            icon={iconOf(issue.status)}
+            className="h-3.5 w-3.5"
+          />
           {t(($) => $.actions.status)}
         </P.SubTrigger>
         <P.SubContent>
-          {ALL_STATUSES.map((s) => (
-            <P.Item key={s} onClick={() => updateField({ status: s })}>
-              <StatusIcon status={s} className="h-3.5 w-3.5" />
-              {t(($) => $.status[s])}
-              {issue.status === s && (
+          {/* The same set as the status picker: every entry point that can
+              change a status must offer it, or a custom status is unreachable
+              from the board's right-click menu. (MUL-6243) */}
+          {statusOptions.map((option) => (
+            <P.Item
+              key={option.key}
+              onClick={() => setStatus(option.key)}
+            >
+              <StatusIcon
+                status={option.key}
+                category={option.category}
+                color={option.color}
+                icon={option.icon}
+                className="h-3.5 w-3.5"
+              />
+              {option.label}
+              {issue.status === option.key && (
                 <span className="ml-auto text-caption text-muted-foreground">{"✓"}</span>
               )}
             </P.Item>
@@ -177,7 +244,7 @@ export function IssueActionsMenuItems({
           {PRIORITY_DISPLAY_ORDER.map((p) => (
             <P.Item key={p} onClick={() => updateField({ priority: p })}>
               <span
-                className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-caption font-medium ${PRIORITY_CONFIG[p].badgeBg} ${PRIORITY_CONFIG[p].badgeText}`}
+                className={`inline-flex items-center gap-1 rounded-xs px-1.5 py-0.5 text-caption font-medium ${PRIORITY_CONFIG[p].badgeBg} ${PRIORITY_CONFIG[p].badgeText}`}
               >
                 <PriorityIcon priority={p} className="h-3 w-3" inheritColor />
                 {t(($) => $.priority[p])}
@@ -277,7 +344,9 @@ export function IssueActionsMenuItems({
       </P.Item>
       <P.Item onClick={handleCopyWorkdirPath}>
         <FolderOpen className="h-3.5 w-3.5" />
-        {t(($) => $.actions.copy_workdir_path)}
+        {workdirCopyTarget?.source === "durable_project_directory"
+          ? t(($) => $.actions.copy_project_directory_path)
+          : t(($) => $.actions.copy_workdir_path)}
       </P.Item>
 
       <P.Separator />
@@ -310,8 +379,25 @@ export function IssueActionsMenuItems({
             <ArrowDown className="h-3.5 w-3.5" />
             {t(($) => $.actions.add_sub_issue)}
           </P.Item>
+          {/* Marking a duplicate cancels the issue. (MUL-7420) */}
+          {workflowAllowsStatus(workflow, "cancelled") && (
+            <P.Item onClick={openMarkDuplicate}>
+              <CircleEqual className="h-3.5 w-3.5" />
+              {t(($) => $.actions.mark_duplicate)}
+            </P.Item>
+          )}
         </P.SubContent>
       </P.Sub>
+
+      {/* Manual plugin hooks. Rendered by the host rather than by the plugin
+          because the trigger decides identity: a `manual` call acts as the
+          person who picked it, so the entry has to live where the host can
+          prove somebody did. Renders nothing when no plugin declares one. */}
+      <PluginHookMenuItems issueId={issue.id} Item={P.Item} Separator={P.Separator} />
+      {/* Modal surfaces open from here for the same reason: a modal is a third
+          party's UI taking over the screen, so it opens because a person chose
+          it, never on the plugin's own initiative. */}
+      <PluginModalMenuItems issueId={issue.id} Item={P.Item} />
 
       <P.Separator />
 
@@ -324,16 +410,4 @@ export function IssueActionsMenuItems({
       </P.Item>
     </>
   );
-}
-
-function pickLatestWorkDir(tasks: AgentTask[] | undefined): string | undefined {
-  if (!tasks?.length) return undefined;
-  let latest: AgentTask | undefined;
-  for (const task of tasks) {
-    if (!task.work_dir) continue;
-    if (!latest || task.created_at > latest.created_at) {
-      latest = task;
-    }
-  }
-  return latest?.work_dir;
 }

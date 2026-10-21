@@ -8,6 +8,7 @@ import {
   type AgentDraft,
   type AgentPermissionScope,
 } from "@multica/core/agents";
+import { useConfigStore } from "@multica/core/config";
 import type { MemberWithUser, RuntimeDevice } from "@multica/core/types";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import { Input } from "@multica/ui/components/ui/input";
@@ -26,6 +27,7 @@ import { ThinkingSettingField } from "../components/inspector/thinking-prop-row"
 import { ModelDropdown } from "../components/model-dropdown";
 import { RuntimePicker } from "../components/runtime-picker";
 import { SkillMultiSelect } from "../components/skill-multi-select";
+import { ConversationStartersEditor } from "../components/conversation-starters-editor";
 
 const PERMISSION_SCOPES: AgentPermissionScope[] = [
   "private",
@@ -36,6 +38,7 @@ const PERMISSION_SCOPES: AgentPermissionScope[] = [
 export function AgentConfigurationPanel({
   draft,
   onChange,
+  onAutomaticChange = onChange,
   runtimes,
   runtimesLoading,
   members,
@@ -49,6 +52,8 @@ export function AgentConfigurationPanel({
 }: {
   draft: AgentDraft;
   onChange: (draft: AgentDraft) => void;
+  /** Value cleanup without user interaction, such as an unsupported model. */
+  onAutomaticChange?: (draft: AgentDraft) => void;
   runtimes: RuntimeDevice[];
   runtimesLoading: boolean;
   members: MemberWithUser[];
@@ -66,6 +71,9 @@ export function AgentConfigurationPanel({
   runtimeSwitchInFlight?: boolean;
 }) {
   const { t } = useT("agents");
+  const conversationStartersSupported = useConfigStore(
+    (state) => state.agentConversationStartersSupported,
+  );
   const selectedRuntime =
     runtimes.find((runtime) => runtime.id === draft.runtimeId) ?? null;
   const set = <K extends keyof AgentDraft>(key: K, value: AgentDraft[K]) =>
@@ -90,7 +98,6 @@ export function AgentConfigurationPanel({
     <div className={cn("space-y-8", compact && "space-y-6")}>
       <SettingsSection
         title={t(($) => $.creation_studio.sections.identity)}
-        description={t(($) => $.creation_studio.sections.identity_hint)}
       >
         <SettingsCard>
           <DraftFieldRow
@@ -148,7 +155,6 @@ export function AgentConfigurationPanel({
 
       <SettingsSection
         title={t(($) => $.creation_studio.sections.behavior)}
-        description={t(($) => $.creation_studio.sections.behavior_hint)}
       >
         <SettingsCard>
           <DraftFieldRow
@@ -170,6 +176,14 @@ export function AgentConfigurationPanel({
               className="min-h-44 resize-y font-mono text-label leading-6"
             />
           </DraftFieldRow>
+          {conversationStartersSupported ? (
+            <div className="px-4 py-4">
+              <ConversationStartersEditor
+                value={draft.conversationStarters}
+                onChange={(value) => set("conversationStarters", value)}
+              />
+            </div>
+          ) : null}
           <div className="px-4 py-4">
             <SkillMultiSelect
               selectedIds={draft.skillIds}
@@ -196,6 +210,7 @@ export function AgentConfigurationPanel({
                 selectedRuntimeId={draft.runtimeId}
                 onSelect={handleRuntimeSelect}
                 disabled={runtimeLocked}
+                autoSelect={!onRuntimeSelect}
               />
               {/* A silently greyed-out picker is the worst version of this: the
                   user reaches for it exactly when the current runtime has gone
@@ -211,6 +226,9 @@ export function AgentConfigurationPanel({
               runtimeOnline={selectedRuntime?.status === "online"}
               value={draft.model}
               onChange={(value) => onChange(applyDraftModelChange(draft, value))}
+              onAutomaticChange={(value) =>
+                onAutomaticChange(applyDraftModelChange(draft, value))
+              }
               // A successful switch clears the model, so an edit made while the
               // rebind is in flight would be silently discarded.
               disabled={!selectedRuntime || runtimeSwitchInFlight}
@@ -232,7 +250,6 @@ export function AgentConfigurationPanel({
 
       <SettingsSection
         title={t(($) => $.creation_studio.sections.access)}
-        description={t(($) => $.creation_studio.sections.access_hint)}
       >
         <SettingsCard>
           <div
@@ -404,6 +421,7 @@ export function AgentExecutionOverrides({
         label={t(($) => $.creation_studio.speed_label)}
         runtimeId={runtime?.id ?? null}
         runtimeOnline={runtimeOnline}
+        provider={runtime?.provider ?? ""}
         model={draft.model}
         value={draft.serviceTier}
         canEdit={!disabled}

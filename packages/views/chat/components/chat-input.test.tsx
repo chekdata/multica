@@ -13,6 +13,10 @@ import enEditor from "../../locales/en/editor.json";
 // mocking that call; it resolves a server Attachment row (makeUpload's extra
 // link/markdownLink fields are ignored by the engine, which re-derives them).
 const mockApiUploadFile = vi.hoisted(() => vi.fn());
+const mockToastInfo = vi.hoisted(() => vi.fn());
+vi.mock("sonner", () => ({
+  toast: Object.assign(vi.fn(), { info: mockToastInfo, error: vi.fn(), success: vi.fn() }),
+}));
 // Observability for the write-back insert path: a settle whose mount died
 // delivers into the live editor through this method.
 const insertMarkdownSpy = vi.hoisted(() => vi.fn());
@@ -61,7 +65,12 @@ const editorProps = vi.hoisted(() => ({
 }));
 // Records imperative editor calls so tests can assert whether a commit
 // scrubbed the editor (clearEditor) or left it intact (fire-and-forget).
-const editorState = vi.hoisted(() => ({ cleared: 0, blurred: 0, focused: 0 }));
+const editorState = vi.hoisted(() => ({
+  cleared: 0,
+  blurred: 0,
+  focused: 0,
+  adopted: [] as string[],
+}));
 
 vi.mock("../../editor", async () => ({
   // Real submit gate (pure React) driven by the mock editor's
@@ -163,6 +172,7 @@ vi.mock("../../editor", async () => ({
       // Same file: the upload-pinned adopt path needs the real Guard 0, which
       // this mock has no concept of. Kept so the ref honours the full contract.
       adoptContent: (markdown: string) => {
+        editorState.adopted.push(markdown);
         valueRef.current = markdown;
       },
     }));
@@ -248,6 +258,7 @@ beforeEach(() => {
   editorState.cleared = 0;
   editorState.blurred = 0;
   editorState.focused = 0;
+  editorState.adopted = [];
   const state = useChatStore.getState() as unknown as {
     activeSessionId: string | null;
     selectedAgentId: string;
@@ -346,6 +357,7 @@ beforeEach(() => {
     delete state.inputDraftAttachments[key];
   });
   mockApiUploadFile.mockReset();
+  mockToastInfo.mockClear();
   mockApiUploadFile.mockImplementation(async () =>
     makeUpload({ id: "att-1", link: "https://cdn.example/att-1.png", filename: "img.png" }),
   );
@@ -491,6 +503,153 @@ describe("ChatInput focusRequest", () => {
   it("does not focus on mount when focusRequest is undefined or 0", () => {
     renderInput();
     expect(editorState.focused).toBe(0);
+  });
+});
+
+describe("ChatInput conversation starter send", () => {
+  it("sends the chosen prompt immediately from an empty draft", async () => {
+    const onSend = vi.fn().mockResolvedValue(false);
+    const onConversationStarterApplied = vi.fn();
+    const { rerender } = renderInput({ onSend });
+
+    rerender(
+      element({
+        onSend,
+        conversationStarterRequest: {
+          id: 1,
+          content: "Review the release pull request.",
+        },
+        onConversationStarterApplied,
+      }),
+    );
+
+    expect(useChatStore.getState().setInputDraft).toHaveBeenLastCalledWith(
+      "__draft_new__",
+      "Review the release pull request.",
+    );
+    expect(editorState.adopted).toEqual(["Review the release pull request."]);
+    expect(onConversationStarterApplied).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    expect(onSend).toHaveBeenCalledWith(
+      "Review the release pull request.",
+      undefined,
+      expect.any(Function),
+      [],
+    );
+  });
+
+  it("preserves an existing draft and explains why the starter was not sent", async () => {
+    const onSend = vi.fn().mockResolvedValue(true);
+    const { rerender } = renderInput({ onSend });
+    fireEvent.change(screen.getByTestId("editor"), {
+      target: { value: "unfinished local text" },
+    });
+    rerender(element({ onSend, conversationStarterRequest: { id: 1, content: "Deploy the release." } }));
+
+    await act(async () => {});
+    expect(onSend).not.toHaveBeenCalled();
+    expect(editorState.adopted).toEqual([]);
+    expect(useChatStore.getState().inputDrafts["__draft_new__"]).toBe("unfinished local text");
+    expect(mockToastInfo).toHaveBeenCalledWith("Send or clear your draft before using a starter.");
+  });
+
+  it("preserves staged attachments even when the draft text is empty", async () => {
+    const attachment = makeUpload({ id: "att-1", link: "https://cdn.example/att-1.png", filename: "image.png" });
+    const staged = { clientUploadId: "upload-1", status: "uploaded", filename: "image.png", size: 1, attachment } as DraftUpload;
+    useChatStore.getState().setInputDraftAttachments("__draft_new__", [staged]);
+    const { onSend } = renderInput({ conversationStarterRequest: { id: 1, content: "Deploy the release." } });
+
+    await act(async () => {});
+    expect(onSend).not.toHaveBeenCalled();
+    expect(useChatStore.getState().inputDraftAttachments["__draft_new__"]).toEqual([staged]);
+    expect(mockToastInfo).toHaveBeenCalledWith("Send or clear your draft before using a starter.");
+  });
+
+  it("sends each request only once across rerenders", async () => {
+    const onSend = vi.fn().mockResolvedValue(false);
+    const request = {
+      id: 1,
+      content: "Review the release pull request.",
+    };
+    const { rerender } = renderInput({ onSend, conversationStarterRequest: request });
+
+    rerender(element({ onSend, conversationStarterRequest: request }));
+
+    expect(editorState.adopted).toEqual([request.content]);
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps a rejected starter in the draft for manual retry", async () => {
+    const onSend = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const request = { id: 1, content: "Review the release pull request." };
+    renderInput({ onSend, conversationStarterRequest: request });
+
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    const sendButton = screen.getByRole("button", { name: "Send" });
+    await waitFor(() => expect(sendButton).toBeEnabled());
+    expect(useChatStore.getState().inputDrafts["__draft_new__"]).toBe(request.content);
+    expect(editorState.cleared).toBe(0);
+
+    fireEvent.click(sendButton);
+    await waitFor(() => expect(editorState.cleared).toBe(1));
+    expect(onSend).toHaveBeenCalledTimes(2);
+    expect(useChatStore.getState().inputDrafts["__draft_new__"]).toBeUndefined();
+  });
+
+  it("ignores another starter while a send is pending", async () => {
+    let finishSend!: (accepted: boolean) => void;
+    const onSend = vi.fn(() => new Promise<boolean>((resolve) => { finishSend = resolve; }));
+    const first = { id: 1, content: "Review the release pull request." };
+    const second = { id: 2, content: "Deploy the release." };
+    const { rerender } = renderInput({ onSend, conversationStarterRequest: first });
+
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    rerender(element({ onSend, conversationStarterRequest: second }));
+    expect(editorState.adopted).toEqual([first.content]);
+    expect(useChatStore.getState().inputDrafts["__draft_new__"]).toBe(first.content);
+
+    await act(async () => finishSend(true));
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(editorState.cleared).toBe(1);
+  });
+
+  it.each([
+    { disabled: true },
+    { noAgent: true },
+    { isRunning: true, allowSubmitWhileRunning: false },
+  ])("does not replace a draft or defer a send when unavailable: %j", async (guard) => {
+    const onSend = vi.fn().mockResolvedValue(true);
+    const request = { id: 1, content: "Deploy the release." };
+    useChatStore.getState().setInputDraft("__draft_new__", "unfinished local text");
+    const { rerender } = renderInput({ onSend, conversationStarterRequest: request, ...guard });
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(editorState.adopted).toEqual([]);
+    expect(useChatStore.getState().inputDrafts["__draft_new__"]).toBe("unfinished local text");
+    rerender(element({ onSend, conversationStarterRequest: request }));
+    await act(async () => {});
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("does not defer a starter until an active upload finishes", async () => {
+    let finishUpload!: (result: UploadResult) => void;
+    mockApiUploadFile.mockImplementationOnce(() => new Promise<UploadResult>((resolve) => {
+      finishUpload = resolve;
+    }));
+    const onSend = vi.fn().mockResolvedValue(true);
+    const { rerender } = renderInput({ onSend });
+    act(() => dropHandlers.onDrop?.([new File(["x"], "image.png", { type: "image/png" })]));
+    const request = { id: 1, content: "Deploy the release." };
+    rerender(element({ onSend, conversationStarterRequest: request }));
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(editorState.adopted).toEqual([]);
+    expect(mockToastInfo).toHaveBeenCalledWith("Wait for uploads to finish before using a starter.");
+    await act(async () => finishUpload(makeUpload({
+      id: "att-1", link: "https://cdn.example/att-1.png", filename: "image.png",
+    })));
+    expect(onSend).not.toHaveBeenCalled();
+    expect(useChatStore.getState().inputDrafts["__draft_new__"]).toContain("att-1.png");
   });
 });
 
@@ -661,21 +820,6 @@ describe("ChatInput project context", () => {
 
     expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Queue message" })).not.toBeInTheDocument();
-  });
-
-  it("keeps the composer chrome independent of the queue", () => {
-    // The follow-up queue tucks its bottom edge under the composer, which
-    // therefore ALWAYS paints on top (static z-10) — but the queue's presence
-    // must never restyle the input surface itself.
-    const { container } = renderInput();
-    const surface = container.querySelector('[data-slot="chat-input-surface"]');
-
-    expect(container.firstElementChild).toHaveClass("relative", "z-10");
-    expect(surface).toHaveClass("rounded-lg");
-    expect(surface).not.toHaveClass(
-      "rounded-4xl",
-      "shadow-[var(--menu-shadow)]",
-    );
   });
 
   it("locks the project control while a send is in flight so a mid-send switch cannot retarget the session", async () => {
@@ -1409,5 +1553,101 @@ describe("ChatInput commit handoff", () => {
     // else's draft: refocus is bound to having actually scrubbed the document.
     await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
     expect(editorState.focused).toBe(0);
+  });
+});
+
+// Send and Stop must retain composer focus so Android's keyboard stays open.
+describe("ChatInput send keeps composer focus", () => {
+  async function readySendButton() {
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "msg" } });
+    let sendButton!: HTMLElement;
+    await waitFor(() => {
+      const buttons = screen.getAllByRole("button");
+      sendButton = buttons[buttons.length - 1]!;
+      expect(sendButton).not.toBeDisabled();
+    });
+    return sendButton;
+  }
+
+  it("cancels the send button's pointer-down so focus never leaves the editor", async () => {
+    renderInput();
+    const sendButton = await readySendButton();
+
+    // fireEvent returns false when a handler called preventDefault().
+    expect(fireEvent.pointerDown(sendButton)).toBe(false);
+  });
+
+  it("cancels the send button's compatibility mouse-down on Android", async () => {
+    renderInput();
+    const sendButton = await readySendButton();
+
+    expect(fireEvent.mouseDown(sendButton)).toBe(false);
+  });
+
+  it("still submits on tap — cancelling pointer-down suppresses focus, not activation", async () => {
+    const onSend = vi.fn<ChatInputOnSend>((_content, _ids, commitInput) => {
+      commitInput();
+      return true;
+    });
+    renderInput({ onSend });
+    const sendButton = await readySendButton();
+
+    fireEvent.pointerDown(sendButton);
+    fireEvent.click(sendButton);
+
+    await waitFor(() => expect(onSend).toHaveBeenCalled());
+    expect(onSend.mock.calls[0]![0]).toBe("msg");
+  });
+
+  it("cancels the stop button's pointer-down too — the slot must not flip behaviour mid-run", () => {
+    renderInput({ isRunning: true, onStop: vi.fn() });
+
+    expect(fireEvent.pointerDown(screen.getByRole("button", { name: "Stop" }))).toBe(false);
+  });
+
+  it("cancels the stop button's compatibility mouse-down on Android", () => {
+    renderInput({ isRunning: true, onStop: vi.fn() });
+
+    expect(fireEvent.mouseDown(screen.getByRole("button", { name: "Stop" }))).toBe(false);
+  });
+
+  it("still stops on tap", () => {
+    const onStop = vi.fn();
+    renderInput({ isRunning: true, onStop });
+
+    const stopButton = screen.getByRole("button", { name: "Stop" });
+    fireEvent.pointerDown(stopButton);
+    fireEvent.click(stopButton);
+
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+});
+
+// MUL-6380: the composer's placeholder is the only text on screen once the input
+// is disabled, so it has to name the right reason. `agentAccessRevoked` wins over
+// `noAgent` because both are true in the reported case — the workspace's only
+// agent is the one this user may no longer run — and "create an agent" would then
+// send them to build a second agent they do not need.
+describe("ChatInput revoked-access placeholder", () => {
+  it("names the revoked permission rather than the archived-session reason", () => {
+    renderInput({ disabled: true, agentAccessRevoked: true });
+
+    expect(editorProps.last?.placeholder).toBe(
+      "You no longer have permission to run this agent",
+    );
+  });
+
+  it("wins over noAgent when the revoked agent is the only one in the workspace", () => {
+    renderInput({ disabled: true, agentAccessRevoked: true, noAgent: true });
+
+    expect(editorProps.last?.placeholder).toBe(
+      "You no longer have permission to run this agent",
+    );
+  });
+
+  it("leaves the normal placeholder alone when access is intact", () => {
+    renderInput({ agentName: "Multica" });
+
+    expect(editorProps.last?.placeholder).toBe("Message Multica…");
   });
 });

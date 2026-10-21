@@ -89,7 +89,8 @@ import {
   CollectionPageHeaderAction,
   CollectionPageState,
 } from "../../layout/collection-page";
-import { useT } from "../../i18n";
+import { useLocale, useT } from "../../i18n";
+import { PAGE_TOOLBAR } from "../../layout/page-header";
 
 // Column template — the simplest member of the ListGrid family (squads are
 // the fewest entity, 1-5 rows): subgrid template + var tracks + two-zone
@@ -137,9 +138,7 @@ function columnTrackVars(
   } as React.CSSProperties;
 }
 
-// ---------------------------------------------------------------------------
 // Cells
-// ---------------------------------------------------------------------------
 
 function SquadAvatar({ squad }: { squad: Squad }) {
   const initials = squad.name
@@ -247,11 +246,9 @@ function MembersCell({ squad }: { squad: Squad }) {
   );
 }
 
-// ---------------------------------------------------------------------------
 // Archive (= delete) dialog — reuses the existing archive_dialog copy.
 // Workspace owner/admin only (backend gate). No restore endpoint exists, so
 // once archived a squad is gone from the UI.
-// ---------------------------------------------------------------------------
 
 function ArchiveSquadDialog({
   squad,
@@ -371,9 +368,7 @@ function SquadRowActions({ squad }: { squad: Squad }) {
   );
 }
 
-// ---------------------------------------------------------------------------
 // Header + toolbar
-// ---------------------------------------------------------------------------
 
 function SquadListHeader({
   sortField,
@@ -499,7 +494,7 @@ function SquadListToolbar({
   const sortLabel = SORT_LABELS[sortField];
 
   return (
-    <div className="flex h-12 shrink-0 items-center justify-between gap-2 px-5">
+    <div className={PAGE_TOOLBAR}>
       <div className="flex min-w-0 items-center gap-2">
         <div className="hidden shrink-0 items-center gap-1 md:flex">
           {SQUAD_SCOPES.map((s) => (
@@ -765,12 +760,11 @@ function SquadListToolbar({
   );
 }
 
-// ---------------------------------------------------------------------------
 // Page
-// ---------------------------------------------------------------------------
 
 export function SquadsPage() {
   const { t } = useT("squads");
+  const locale = useLocale();
   const workspace = useCurrentWorkspace();
   const wsId = workspace?.id ?? "";
   const p = useWorkspacePaths();
@@ -1010,7 +1004,7 @@ export function SquadsPage() {
                     )}
                     {isColVisible("created") ? (
                       <ListGridCell className="hidden whitespace-nowrap text-caption tabular-nums text-muted-foreground @2xl:flex">
-                        {new Date(squad.created_at).toLocaleDateString()}
+                        {new Date(squad.created_at).toLocaleDateString(locale)}
                       </ListGridCell>
                     ) : (
                       <ListGridCell className="hidden px-0 @2xl:flex" />

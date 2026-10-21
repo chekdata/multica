@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/dbid"
 )
 
 const agentBuilderInstructions = `You are Multica Agent Builder. Help the user design one practical AI agent through a short conversation.
@@ -20,7 +21,7 @@ const agentBuilderInstructions = `You are Multica Agent Builder. Help the user d
 Your job is to propose and refine configuration, never to create resources yourself. Ask only questions that materially change behavior. Prefer making a reasonable draft immediately, then ask at most two focused questions per turn.
 
 Every response MUST end with exactly one <agent_draft> JSON block using this shape:
-<agent_draft>{"name":"","description":"","instructions":"","model":"","skill_ids":[],"permission_scope":"private","member_ids":[]}</agent_draft>
+<agent_draft>{"name":"","description":"","instructions":"","conversation_starters":[],"model":"","skill_ids":[],"permission_scope":"private","member_ids":[]}</agent_draft>
 
 Rules:
 - The JSON must be valid, compact JSON on one physical line. Do not wrap it in Markdown fences.
@@ -29,6 +30,7 @@ Rules:
 - name is concise and suitable for a workspace list.
 - description is one sentence, at most 200 characters.
 - instructions are a complete Markdown system prompt describing role, workflow, output, and constraints.
+- conversation_starters contains up to three objects with a concise label and a complete prompt. Each should demonstrate a useful first task for this specific agent; never include generic filler.
 - model must be empty, preserve current_draft.model, or exactly match an id explicitly listed in AVAILABLE RUNTIME MODELS. Never use a model label as the id.
 - When AVAILABLE RUNTIME MODELS is null or empty, preserve current_draft.model and never invent a model id.
 - skill_ids may only contain IDs explicitly listed in AVAILABLE WORKSPACE SKILLS.
@@ -102,6 +104,17 @@ func (h *Handler) CreateAgentBuilderSession(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Hold the runtime's access lock through creation so a concurrent privacy
+	// change cannot commit between authorization and the new binding.
+	runtime, err = qtx.LockAgentRuntimeForAccessChange(r.Context(), runtime.ID)
+	if err != nil || runtime.WorkspaceID != workspaceUUID {
+		writeError(w, http.StatusBadRequest, "invalid runtime_id")
+		return
+	}
+	if !h.authorizeBuilderRuntime(w, r, workspaceID, runtime, "start") {
+		return
+	}
+
 	builder, err := qtx.CreateAgentBuilder(r.Context(), db.CreateAgentBuilderParams{
 		WorkspaceID:  workspaceUUID,
 		Name:         fmt.Sprintf(".multica-agent-builder-%s", flowID),
@@ -111,7 +124,7 @@ func (h *Handler) CreateAgentBuilderSession(w http.ResponseWriter, r *http.Reque
 		Instructions: agentBuilderInstructions,
 		Model:        pgtype.Text{String: model, Valid: model != ""},
 		SystemKey: pgtype.Text{
-			String: fmt.Sprintf("agent_builder:%s", flowID),
+			String: agentBuilderSystemKeyPrefix + flowID,
 			Valid:  true,
 		},
 	})
@@ -121,6 +134,7 @@ func (h *Handler) CreateAgentBuilderSession(w http.ResponseWriter, r *http.Reque
 	}
 
 	session, err := qtx.CreateChatSession(r.Context(), db.CreateChatSessionParams{
+		ID:          dbid.NewV7(),
 		WorkspaceID: workspaceUUID,
 		AgentID:     builder.ID,
 		CreatorID:   ownerUUID,
@@ -128,6 +142,11 @@ func (h *Handler) CreateAgentBuilderSession(w http.ResponseWriter, r *http.Reque
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create agent builder session")
+		return
+	}
+	session, err = qtx.MarkChatSessionExplicitlyCreated(r.Context(), session.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to mark agent builder session explicit")
 		return
 	}
 	if err := tx.Commit(r.Context()); err != nil {
@@ -350,19 +369,26 @@ func (h *Handler) resolveBuilderRuntime(w http.ResponseWriter, r *http.Request, 
 		writeError(w, http.StatusBadRequest, "invalid runtime_id")
 		return db.AgentRuntime{}, false
 	}
-	member, ok := h.workspaceMember(w, r, workspaceID)
-	if !ok {
-		return db.AgentRuntime{}, false
-	}
-	if !canUseRuntimeForAgent(member, runtime) {
-		writeError(w, http.StatusForbidden, "this runtime is private; only its owner or a workspace admin can use it")
-		return db.AgentRuntime{}, false
-	}
-	if runtime.Status != "online" {
-		writeError(w, http.StatusConflict, fmt.Sprintf("runtime must be online to %s an agent builder session", verb))
+	if !h.authorizeBuilderRuntime(w, r, workspaceID, runtime, verb) {
 		return db.AgentRuntime{}, false
 	}
 	return runtime, true
+}
+
+func (h *Handler) authorizeBuilderRuntime(w http.ResponseWriter, r *http.Request, workspaceID string, runtime db.AgentRuntime, verb string) bool {
+	member, ok := h.workspaceMember(w, r, workspaceID)
+	if !ok {
+		return false
+	}
+	if !canUseRuntimeForAgent(member, runtime) {
+		writeError(w, http.StatusForbidden, "this runtime is private; only its owner can use it")
+		return false
+	}
+	if runtime.Status != "online" {
+		writeError(w, http.StatusConflict, fmt.Sprintf("runtime must be online to %s an agent builder session", verb))
+		return false
+	}
+	return true
 }
 
 type SwitchAgentBuilderRuntimeRequest struct {
@@ -448,6 +474,25 @@ func (h *Handler) SwitchAgentBuilderRuntime(w http.ResponseWriter, r *http.Reque
 	defer tx.Rollback(r.Context())
 	qtx := h.Queries.WithTx(tx)
 
+	// Access changes take the runtime lock before locking dependent sessions.
+	// Follow that order and authorize the committed runtime under the lock.
+	if _, err := qtx.LockWorkspaceForChatSessionCreate(r.Context(), workspaceUUID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "workspace not found")
+		} else {
+			writeError(w, http.StatusInternalServerError, "failed to lock workspace")
+		}
+		return
+	}
+	runtime, err = qtx.LockAgentRuntimeForAccessChange(r.Context(), runtime.ID)
+	if err != nil || runtime.WorkspaceID != workspaceUUID {
+		writeError(w, http.StatusBadRequest, "invalid runtime_id")
+		return
+	}
+	if !h.authorizeBuilderRuntime(w, r, workspaceID, runtime, "switch") {
+		return
+	}
+
 	if _, err := qtx.LockChatSessionForRuntimeBind(r.Context(), session.ID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "chat session not found")
@@ -500,5 +545,5 @@ func (h *Handler) SwitchAgentBuilderRuntime(w http.ResponseWriter, r *http.Reque
 func isAgentBuilderCarrier(agent db.Agent) bool {
 	return agent.Kind == "system" &&
 		agent.SystemKey.Valid &&
-		strings.HasPrefix(agent.SystemKey.String, "agent_builder:")
+		strings.HasPrefix(agent.SystemKey.String, agentBuilderSystemKeyPrefix)
 }

@@ -1,42 +1,15 @@
-// Package wecom is the WeCom (企业微信) smart-bot ("智能机器人" / aibot)
-// adapter for the channel-agnostic inbound engine (MUL-3620). It plugs into the
-// same engine.Router / ResolverSet as Feishu and Slack.
+// Package wecom adapts WeCom smart bots to the shared channel engine.
+// Each installation owns a leased WebSocket authenticated by bot_id and secret;
+// inbound callbacks, replies, and media uploads use that connection.
 //
-// Unlike the internal customer-service ("内部客服号") flow which is HTTP-callback
-// based, the smart-bot flow is a client-initiated WebSocket long connection
-// against wss://openws.work.weixin.qq.com. Each installation carries a
-// (bot_id, secret) pair; after the WS handshake the client subscribes with
-// aibot_subscribe and thereafter receives aibot_msg_callback events and sends
-// aibot_send_msg / aibot_respond_msg / aibot_upload_media_* over the same
-// socket. No public callback URL is required.
+// Only the lease-holding replica can write. Redis Stream relay routes completions
+// from other replicas; without relay, a WeCom backend requires a single replica.
+// No live connection means delivery can still be lost. Per-chat quotas bound
+// outbound waits and retries. See SELF_HOSTING.md for deployment requirements.
 //
-// One installation = one bot = one WebSocket. WeCom allows only one active
-// connection per bot; a second connection kicks the first with a
-// disconnected_event. That single-active-connection guarantee lines up with
-// engine.Supervisor's WS lease, so the multi-replica invariant (at most one
-// active connection per installation across processes) already holds without
-// wecom-specific code.
-//
-// Maintenance: this package is COMMUNITY-MAINTAINED. @leroy-chen contributed it
-// and co-owns it with @seacen — they are the first stop for WeCom-specific bugs
-// and behavior questions, on a best-effort volunteer basis. The Multica team
-// keeps this package compiling and its tests green through shared-layer
-// refactors, but does not use WeCom and cannot verify behavior against the real
-// platform; that part depends on the code owners. If the integration breaks in a
-// way that cannot be fixed without real WeCom access and no fix lands for a few
-// releases, it may be deprecated rather than left quietly broken. Changing the
-// shared channel engine? Keep this adapter building — and loop in the code
-// owners for anything that changes WeCom-visible behavior.
-//
-// Inbound handles text, the transcript WeCom returns for a voice note,
-// photos, files, videos and 图文混排 (media_ingest.go downloads and decrypts
-// what a callback points at); a kind it cannot read still gets a short
-// receipt.
-//
-// Known limit, deliberate: outbound delivery requires a SINGLE backend
-// replica, because the only send path is the in-process WebSocket in
-// sendersRegistry while EventChatDone dispatches on the in-process
-// events.Bus. See SELF_HOSTING.md.
+// Files are delivered after the agent exits, so failures are reported to the chat
+// rather than the producing run. Community ownership and support boundaries live
+// at https://multica.ai/docs/community-maintained.
 package wecom
 
 import (
