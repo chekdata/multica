@@ -110,6 +110,40 @@ func TestLocalStorageDeleteObjectReclaimsCrashLeftoverTemp(t *testing.T) {
 	}
 }
 
+func TestLocalStorageDeleteObjectCannotEscapeUploadDirectory(t *testing.T) {
+	for _, key := range []string{"../outside/object", "nested/../../outside/object", "linked/object", ".", "nested/.."} {
+		t.Run(key, func(t *testing.T) {
+			dir := t.TempDir()
+			uploadDir := filepath.Join(dir, "uploads")
+			outsideDir := filepath.Join(dir, "outside")
+			for _, path := range []string{uploadDir, outsideDir} {
+				if err := os.MkdirAll(path, 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Symlink(outsideDir, filepath.Join(uploadDir, "linked")); err != nil {
+				t.Fatal(err)
+			}
+			object := filepath.Join(outsideDir, "object")
+			paths := []string{object, object + metaSuffix, tempPath(object)}
+			for _, path := range paths {
+				if err := os.WriteFile(path, []byte("must survive"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s := &LocalStorage{uploadDir: uploadDir}
+			if err := s.DeleteObject(context.Background(), key); err == nil {
+				t.Fatal("DeleteObject must reject a key outside the upload directory")
+			}
+			for _, path := range paths {
+				if data, err := os.ReadFile(path); err != nil || string(data) != "must survive" {
+					t.Fatalf("outside file changed: %s: %q, %v", path, data, err)
+				}
+			}
+		})
+	}
+}
+
 // The staging file must not be readable through the object read paths: keys
 // come straight from the request URL, so a half-written body would otherwise
 // be exposed under a guessable name.

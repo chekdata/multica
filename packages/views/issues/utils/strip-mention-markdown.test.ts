@@ -60,4 +60,15 @@ describe("stripMentionMarkdown", () => {
   it("handles empty string", () => {
     expect(stripMentionMarkdown("")).toBe("");
   });
+
+  it("preserves malformed mentions before a valid mention", () => {
+    expect(stripMentionMarkdown("[empty](mention://agent/) [bad](mention://a-b/id) [ok](mention://issue/id)"))
+      .toBe("[empty](mention://agent/) [bad](mention://a-b/id) ok");
+  });
+
+  it("handles long malformed labels without backtracking", () => {
+    for (const text of ["[" + "\\a".repeat(30_000), "[".repeat(30_000) + "x"]) {
+      expect(stripMentionMarkdown(text)).toBe(text);
+    }
+  });
 });
