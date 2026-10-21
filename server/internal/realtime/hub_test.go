@@ -25,20 +25,70 @@ const testUserID = "test-user"
 // mockMembershipChecker always returns true.
 type mockMembershipChecker struct{}
 
-func (m *mockMembershipChecker) IsMember(_ context.Context, _, _ string) bool {
-	return true
+func (m *mockMembershipChecker) IsMember(_ context.Context, _, _ string) (bool, error) {
+	return true, nil
+}
+
+func (*mockMembershipChecker) Members(_ context.Context, identities []MembershipIdentity) (map[MembershipIdentity]bool, error) {
+	members := make(map[MembershipIdentity]bool, len(identities))
+	for _, identity := range identities {
+		members[identity] = true
+	}
+	return members, nil
 }
 
 func makeTestToken(t *testing.T) string {
+	return makeTestTokenForUser(t, testUserID, "")
+}
+
+func makeTestTokenForUser(t *testing.T, userID, email string) string {
 	t.Helper()
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+	claims := jwt.MapClaims{
 		"sub": testUserID,
-	})
+	}
+	if userID != "" {
+		claims["sub"] = userID
+	}
+	if email != "" {
+		claims["email"] = email
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := token.SignedString(auth.JWTSecret())
 	if err != nil {
 		t.Fatalf("failed to sign test JWT: %v", err)
 	}
 	return signed
+}
+
+type staticPATResolver map[string]string
+
+func (s staticPATResolver) ResolveToken(_ context.Context, token string) (string, bool) {
+	userID, ok := s[token]
+	return userID, ok
+}
+
+func TestAuthenticateTokenRejectsTemporarilyDisabledJWTUser(t *testing.T) {
+	token := makeTestTokenForUser(t, "514492f7-b30f-4147-bd33-c0e8ce5d6d4f", "")
+
+	uid, errMsg := authenticateToken(token, nil, context.Background())
+	if uid != "" {
+		t.Fatalf("expected no user ID, got %q", uid)
+	}
+	if !strings.Contains(errMsg, "account disabled") {
+		t.Fatalf("expected account disabled error, got %q", errMsg)
+	}
+}
+
+func TestAuthenticateTokenRejectsTemporarilyDisabledPATUser(t *testing.T) {
+	uid, errMsg := authenticateToken("mul_disabled", staticPATResolver{
+		"mul_disabled": "1d542296-17c6-484a-9914-dcee589be116",
+	}, context.Background())
+	if uid != "" {
+		t.Fatalf("expected no user ID, got %q", uid)
+	}
+	if !strings.Contains(errMsg, "account disabled") {
+		t.Fatalf("expected account disabled error, got %q", errMsg)
+	}
 }
 
 func newTestHub(t *testing.T) (*Hub, *httptest.Server) {
@@ -47,6 +97,7 @@ func newTestHub(t *testing.T) (*Hub, *httptest.Server) {
 	go hub.Run()
 
 	mc := &mockMembershipChecker{}
+	hub.SetMembershipChecker(mc)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		HandleWebSocket(hub, mc, nil, nil, w, r)

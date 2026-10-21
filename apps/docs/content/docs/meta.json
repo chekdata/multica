@@ -14,6 +14,7 @@
     "---Issues & projects---",
     "issues",
     "projects",
+    "workflows",
     "project-resources",
     "---Agents---",
     "agents",
@@ -24,6 +25,7 @@
     "triggering-agents",
     "assigning-issues",
     "comments",
+    "quick-actions",
     "mentioning-agents",
     "chat",
     "inbox",
@@ -39,6 +41,7 @@
     "lark-bot-integration",
     "slack-bot-integration",
     "dingtalk-bot-integration",
+    "telegram-bot-integration",
     "github-integration",
     "vcs-integration",
     "---Apps---",
@@ -52,6 +55,8 @@
     "---Reference---",
     "cli",
     "auth-tokens",
+    "---Community---",
+    "community-maintained",
     "---Development---",
     "developers"
   ]

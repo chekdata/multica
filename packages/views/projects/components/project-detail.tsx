@@ -7,7 +7,9 @@ import { useQuery } from "@tanstack/react-query";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { toast } from "sonner";
-import type { ProjectStatus, ProjectPriority } from "@multica/core/types";
+import type { Project, ProjectStatus, ProjectPriority } from "@multica/core/types";
+import { useFeatureEnabled } from "@multica/core/config";
+import { PROJECT_WORKFLOWS_V1_FLAG } from "@multica/core/feature-flags";
 import { useAuthStore } from "@multica/core/auth";
 import { projectDetailOptions } from "@multica/core/projects/queries";
 import { useUpdateProject, useDeleteProject } from "@multica/core/projects/mutations";
@@ -22,12 +24,14 @@ import { useActorName } from "@multica/core/workspace/hooks";
 import { PROJECT_STATUS_ORDER, PROJECT_STATUS_CONFIG, PROJECT_PRIORITY_ORDER } from "@multica/core/projects/config";
 import { getProjectIssueMetrics } from "./project-issue-metrics";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { useNavigation } from "../../navigation";
+import { currentPath, useNavigation } from "../../navigation";
 import { TitleEditor, ContentEditor, type ContentEditorRef } from "../../editor";
 import { PriorityIcon } from "../../issues/components/priority-icon";
 import { ProjectResourcesSection } from "./project-resources-section";
 import { ProjectStartDatePicker } from "./project-start-date-picker";
 import { ProjectDueDatePicker } from "./project-due-date-picker";
+import { ProjectWorkflowControl } from "../../workflows/project-workflow-row";
+import { ProjectWorkflowMenu } from "../../workflows/project-workflow-menu";
 import { IssueSurface } from "../../issues/surface/issue-surface";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Button } from "@multica/ui/components/ui/button";
@@ -58,6 +62,7 @@ import {
   getAnimatedRightSidebarInitialOpen,
   rightSidebarPanelMotionProps,
   useAnimatedRightSidebarState,
+  useRightSidebarShortcut,
 } from "../../layout/animated-right-sidebar";
 import {
   AlertDialog,
@@ -73,9 +78,7 @@ import { useT } from "../../i18n";
 import { useProjectStatusLabels, useProjectPriorityLabels } from "./labels";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 
-// ---------------------------------------------------------------------------
 // Property row — sidebar property display
-// ---------------------------------------------------------------------------
 
 function PropRow({
   label,
@@ -94,9 +97,20 @@ function PropRow({
   );
 }
 
-// ---------------------------------------------------------------------------
+// The project's workflow (MUL-7420). Hidden while workflows are off, unless the
+// project already uses one — it can always switch back to Default.
+function ProjectWorkflowPropRow({ project }: { project: Project }) {
+  const { t } = useT("issues");
+  const enabled = useFeatureEnabled(PROJECT_WORKFLOWS_V1_FLAG, false);
+  if (!enabled && !project.workflow_id) return null;
+  return (
+    <PropRow label={t(($) => $.workflows.project.label)}>
+      <ProjectWorkflowControl project={project} />
+    </PropRow>
+  );
+}
+
 // ProjectDetail
-// ---------------------------------------------------------------------------
 
 export function ProjectDetail({ projectId }: { projectId: string }) {
   const { t } = useT("projects");
@@ -155,6 +169,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
     id: "multica_project_detail_layout",
   });
   const sidebarRef = usePanelRef();
+  const rightSidebarShortcutTargetRef = useRef<HTMLDivElement | null>(null);
   const desktopSidebarInitialOpen = getAnimatedRightSidebarInitialOpen(
     true,
     defaultLayout,
@@ -194,6 +209,8 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
       else panel.collapse();
     });
   }, [beginDesktopSidebarToggle, isMobile, sidebarRef]);
+
+  useRightSidebarShortcut(rightSidebarShortcutTargetRef, handleToggleSidebar);
 
   // Lead popover
   const [leadOpen, setLeadOpen] = useState(false);
@@ -408,6 +425,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
           <PropRow label={t(($) => $.detail.prop_due_date)}>
             <ProjectDueDatePicker dueDate={project.due_date} onUpdate={handleUpdateField} />
           </PropRow>
+          <ProjectWorkflowPropRow project={project} />
         </div>}
       </div>
 
@@ -473,12 +491,13 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
     <>
     <ResizablePanelGroup orientation="horizontal" className="flex-1 min-h-0" defaultLayout={defaultLayout} onLayoutChanged={onLayoutChanged}>
       <ResizablePanel id="content" minSize="50%">
-        <div className="flex h-full flex-col">
+        <div ref={rightSidebarShortcutTargetRef} className="flex h-full flex-col">
           <BreadcrumbHeader
             segments={[{ href: wsPaths.projects(), label: t(($) => $.detail.breadcrumb_fallback) }]}
             leaf={<span className="truncate font-medium text-foreground">{project.title}</span>}
             actions={
               <>
+              <ProjectWorkflowMenu project={project} />
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -504,7 +523,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                 />
                 <DropdownMenuContent align="end" className="w-auto">
                   <DropdownMenuItem onClick={() => {
-                    void copyText(window.location.href).then((ok) => {
+                    void copyText(router.getShareableUrl(currentPath(router))).then((ok) => {
                       if (ok) toast.success(t(($) => $.detail.toast_link_copied));
                     });
                   }}>

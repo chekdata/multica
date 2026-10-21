@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { Issue } from "@multica/core/types";
+import type { AgentTask, Issue } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../../locales/en/common.json";
 import enIssues from "../../../locales/en/issues.json";
@@ -99,6 +99,7 @@ vi.mock("../../../navigation", () => ({
     push: vi.fn(),
     pathname: "/test/issues/issue-1",
     searchParams: new URLSearchParams(),
+    hash: "",
     back: vi.fn(),
     replace: vi.fn(),
     ...(navState.hasOpenInNewTab ? { openInNewTab: openInNewTabMock } : {}),
@@ -106,8 +107,29 @@ vi.mock("../../../navigation", () => ({
   }),
 }));
 
+const { toastSuccessMock } = vi.hoisted(() => ({
+  toastSuccessMock: vi.fn(),
+}));
+
 vi.mock("sonner", () => ({
-  toast: { success: vi.fn(), error: vi.fn() },
+  toast: { success: toastSuccessMock, error: vi.fn() },
+}));
+
+const { apiMocks, copyTextMock } = vi.hoisted(() => ({
+  apiMocks: {
+    listTasksByIssue: vi.fn(),
+    listIssueWorkflows: vi.fn(),
+    listProjects: vi.fn(),
+  },
+  copyTextMock: vi.fn(),
+}));
+
+vi.mock("@multica/core/api", () => ({
+  api: apiMocks,
+}));
+
+vi.mock("@multica/ui/lib/clipboard", () => ({
+  copyText: copyTextMock,
 }));
 
 vi.mock("../../../common/actor-avatar", () => ({
@@ -120,6 +142,8 @@ import {
   IssueActionsContextMenu,
   IssueContextMenuProvider,
 } from "../issue-actions-context-menu";
+
+const listTasksByIssueMock = apiMocks.listTasksByIssue;
 
 const mockIssue: Issue = {
   id: "issue-1",
@@ -158,6 +182,15 @@ beforeEach(() => {
   openInNewTabMock.mockReset();
   getShareableUrlMock.mockClear();
   navState.hasOpenInNewTab = true;
+  copyTextMock.mockReset();
+  copyTextMock.mockResolvedValue(true);
+  toastSuccessMock.mockReset();
+  listTasksByIssueMock.mockReset();
+  listTasksByIssueMock.mockResolvedValue([]);
+  apiMocks.listIssueWorkflows.mockReset();
+  apiMocks.listIssueWorkflows.mockResolvedValue({ workflows: [] });
+  apiMocks.listProjects.mockReset();
+  apiMocks.listProjects.mockResolvedValue({ projects: [] });
 });
 
 describe("IssueActionsDropdown", () => {
@@ -178,6 +211,7 @@ describe("IssueActionsDropdown", () => {
     expect(screen.getByText("Priority")).toBeInTheDocument();
     expect(screen.getByText("Assignee")).toBeInTheDocument();
     expect(screen.getByText("Due date")).toBeInTheDocument();
+    expect(screen.getByText("Rename issue")).toBeInTheDocument();
     expect(screen.getByText("Open in new tab")).toBeInTheDocument();
     expect(screen.getByText("Copy link")).toBeInTheDocument();
     expect(screen.getByText("Relations")).toBeInTheDocument();
@@ -267,6 +301,87 @@ describe("IssueActionsDropdown", () => {
       onDeletedFallbackPath: "/test/issues",
     });
   });
+
+  it("clicking Rename issue opens the rename modal with the current title", async () => {
+    render(
+      wrap(
+        <IssueActionsDropdown
+          issue={mockIssue}
+          trigger={<button data-testid="trigger">Menu</button>}
+        />,
+      ),
+    );
+
+    fireEvent.click(screen.getByTestId("trigger"));
+    fireEvent.click(await screen.findByText("Rename issue"));
+
+    expect(mockOpenModal).toHaveBeenCalledWith("issue-rename", {
+      issueId: "issue-1",
+      identifier: "TES-1",
+      title: "Example",
+    });
+  });
+
+  it("copies the durable local project path for a worktree task", async () => {
+    listTasksByIssueMock.mockResolvedValue([
+      {
+        status: "completed",
+        created_at: "2026-08-18T10:00:00Z",
+        work_dir: "/managed/task/worktree",
+        durable_work_dir: "/Users/dev/project",
+        branch_name: "agent/j/abc12345",
+      } as AgentTask,
+    ]);
+
+    render(
+      wrap(
+        <IssueActionsDropdown
+          issue={mockIssue}
+          trigger={<button data-testid="trigger">Menu</button>}
+        />,
+      ),
+    );
+
+    fireEvent.click(screen.getByTestId("trigger"));
+    fireEvent.click(await screen.findByText("Copy project directory path"));
+
+    await waitFor(() => {
+      expect(copyTextMock).toHaveBeenCalledWith("/Users/dev/project");
+      expect(toastSuccessMock).toHaveBeenCalledWith(
+        "Project directory path copied — work is on agent/j/abc12345",
+      );
+    });
+  });
+
+  it("keeps a live task on its actual workdir", async () => {
+    listTasksByIssueMock.mockResolvedValue([
+      {
+        status: "running",
+        created_at: "2026-08-18T10:00:00Z",
+        work_dir: "/managed/task/worktree",
+        durable_work_dir: "/Users/dev/project",
+      } as AgentTask,
+    ]);
+
+    render(
+      wrap(
+        <IssueActionsDropdown
+          issue={mockIssue}
+          trigger={<button data-testid="trigger">Menu</button>}
+        />,
+      ),
+    );
+
+    fireEvent.click(screen.getByTestId("trigger"));
+    await waitFor(() => {
+      expect(listTasksByIssueMock).toHaveBeenCalledWith("issue-1");
+    });
+    fireEvent.click(await screen.findByText("Copy local workdir path"));
+
+    await waitFor(() => {
+      expect(copyTextMock).toHaveBeenCalledWith("/managed/task/worktree");
+    });
+  });
 });
 
 describe("Open in new tab", () => {
@@ -341,7 +456,58 @@ describe("IssueActionsContextMenu", () => {
     expect(await screen.findByText("Status")).toBeInTheDocument();
     // The right-click surface is what list rows, board cards, gantt bars and
     // sub-issue rows all share, so this one assertion covers them together.
+    expect(screen.getByText("Rename issue")).toBeInTheDocument();
     expect(screen.getByText("Open in new tab")).toBeInTheDocument();
     expect(screen.getByText("Delete issue")).toBeInTheDocument();
+  });
+});
+
+describe("Status in a workflow project (MUL-7420)", () => {
+  const workflowIssue = { ...mockIssue, project_id: "proj-1" } as Issue;
+
+  beforeEach(() => {
+    apiMocks.listProjects.mockResolvedValue({
+      projects: [{ id: "proj-1", title: "App", workflow_id: "wf-1", lead_type: null, lead_id: null }],
+    });
+    apiMocks.listIssueWorkflows.mockResolvedValue({
+      workflows: [
+        {
+          id: "wf-1",
+          name: "Delivery",
+          description: "",
+          is_default: false,
+          project_ids: ["proj-1"],
+          steps: [
+            { status_key: "todo", handler: { type: "none" }, instructions: "" },
+            { status_key: "in_progress", handler: { type: "agent", id: "agent-1" }, instructions: "" },
+            { status_key: "done", handler: { type: "none" }, instructions: "" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("offers only the workflow's statuses and confirms a handoff before applying it", async () => {
+    render(
+      wrap(
+        <IssueActionsDropdown
+          issue={workflowIssue}
+          trigger={<button data-testid="trigger">Menu</button>}
+        />,
+      ),
+    );
+
+    fireEvent.click(screen.getByTestId("trigger"));
+    fireEvent.click(await screen.findByText("Status"));
+
+    await waitFor(() => expect(screen.queryByText("Backlog")).not.toBeInTheDocument());
+    expect(screen.queryByText("In Review")).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByText("In Progress"));
+
+    expect(mockOpenModal).toHaveBeenCalledWith("issue-workflow-handoff", {
+      issueId: "issue-1",
+      identifier: "TES-1",
+      status: "in_progress",
+    });
   });
 });

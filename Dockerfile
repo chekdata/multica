@@ -1,5 +1,5 @@
 # --- Build stage ---
-FROM golang:1.26-alpine AS builder
+FROM golang:1.26.10-alpine AS builder
 
 RUN apk add --no-cache git
 
@@ -19,19 +19,22 @@ ARG DATE=unknown
 RUN cd server && CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" -o bin/server ./cmd/server
 RUN cd server && CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" -o bin/multica ./cmd/multica
 RUN cd server && CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/migrate ./cmd/migrate
+RUN cd server && CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/maintenance ./cmd/maintenance
 RUN cd server && CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/backfill_task_usage_hourly ./cmd/backfill_task_usage_hourly
 RUN cd server && CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/backfill_codex_usage_cache ./cmd/backfill_codex_usage_cache
 
 # --- Runtime stage ---
 FROM alpine:3.21
 
-RUN apk add --no-cache ca-certificates tzdata
+# Require the patched OpenSSL packages even when the base image is cached.
+RUN apk add --no-cache ca-certificates tzdata "libcrypto3>=3.3.7-r2" "libssl3>=3.3.7-r2"
 
 WORKDIR /app
 
 COPY --from=builder /src/server/bin/server .
 COPY --from=builder /src/server/bin/multica .
 COPY --from=builder /src/server/bin/migrate .
+COPY --from=builder /src/server/bin/maintenance .
 COPY --from=builder /src/server/bin/backfill_task_usage_hourly .
 COPY --from=builder /src/server/bin/backfill_codex_usage_cache .
 COPY server/migrations/ ./migrations/

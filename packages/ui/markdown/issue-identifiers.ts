@@ -59,8 +59,8 @@ export function isIssueIdentifier(value: string): boolean {
  *   - dotted filename tails like `ABC-123.ts` and path segments like `FOO-1/bar`
  */
 export function preprocessIssueIdentifiers(text: string): string {
-  // Cheap early-out: no `<UPPER>…-<DIGIT>` shape at all.
-  if (!/[A-Z][A-Z0-9]*-\d/.test(text)) return text
+  // A valid identifier must contain this suffix; avoid rescanning long words.
+  if (!/-\d/.test(text)) return text
 
   const codeRanges = findCodeRanges(text)
   const linkRanges = findMarkdownLinkRanges(text)

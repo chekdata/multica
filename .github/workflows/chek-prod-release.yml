@@ -89,6 +89,17 @@ jobs:
             echo "commit_date=$(git show -s --format=%cI HEAD)"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Set up secure Go toolchain
+        uses: actions/setup-go@v5
+        with:
+          go-version: "~1.26.10"
+          check-latest: true
+          cache-dependency-path: server/go.sum
+
+      - name: Verify reachable Go vulnerabilities before promotion
+        working-directory: server
+        run: go tool govulncheck ./...
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -100,6 +111,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push backend image
+        id: backend_build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -118,6 +130,7 @@ jobs:
             DATE=${{ steps.source_meta.outputs.commit_date }}
 
       - name: Build and push web image
+        id: web_build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -132,6 +145,32 @@ jobs:
           cache-to: type=gha,mode=max,scope=chek-prod-web-amd64
           build-args: |
             NEXT_PUBLIC_APP_VERSION=${{ steps.vars.outputs.image_tag }}
+
+      - name: Verify backend runtime before domestic promotion
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          image-ref: ${{ env.BACKEND_IMAGE }}@${{ steps.backend_build.outputs.digest }}
+          scanners: vuln
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+      - name: Verify web runtime before domestic promotion
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          image-ref: ${{ env.WEB_IMAGE }}@${{ steps.web_build.outputs.digest }}
+          scanners: vuln
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
 
       - name: Dispatch domestic image promotion
         shell: bash

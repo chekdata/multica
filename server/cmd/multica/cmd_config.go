@@ -35,8 +35,10 @@ var configSetSupportedKeys = []string{
 	"codex_path",
 	"device_name",
 	"runtime_name",
+	"workspaces_root",
 	"max_concurrent_tasks",
 	"poll_interval",
+	"ws_claim_poll_interval",
 	"heartbeat_interval",
 	"agent_timeout",
 	"codex_semantic_inactivity_timeout",
@@ -50,13 +52,13 @@ var configSetCmd = &cobra.Command{
 	Use:   "set <key> <value>",
 	Short: "Set a CLI configuration value",
 	Long: "Supported keys: " +
-		"server_url, app_url, workspace_id, codex_path, " +
-		"device_name, runtime_name, max_concurrent_tasks, poll_interval, " +
+		"server_url, app_url, workspace_id, " +
+		"device_name, runtime_name, codex_path, workspaces_root, max_concurrent_tasks, poll_interval, ws_claim_poll_interval, " +
 		"heartbeat_interval, agent_timeout, " +
 		"codex_semantic_inactivity_timeout, codex_handshake_timeout, " +
 		"disable_auto_update, auto_update_check_interval, disable_auto_reload.\n\n" +
-		"The daemon keys (device_name, runtime_name, max_concurrent_tasks, " +
-		"poll_interval, heartbeat_interval, agent_timeout, " +
+		"The daemon keys (device_name, runtime_name, workspaces_root, max_concurrent_tasks, " +
+		"poll_interval, ws_claim_poll_interval, heartbeat_interval, agent_timeout, " +
 		"codex_semantic_inactivity_timeout, codex_handshake_timeout, " +
 		"disable_auto_update, auto_update_check_interval, disable_auto_reload) mirror their " +
 		"--flag / env counterparts and are read by `daemon start` when " +
@@ -100,8 +102,10 @@ func runConfigShow(cmd *cobra.Command, _ []string) error {
 	fmt.Fprintf(os.Stdout, "%-34s %s\n", "codex_path:", valueOrDefault(codexPath(cfg), "(not set)"))
 	fmt.Fprintf(os.Stdout, "%-34s %s\n", "device_name:", valueOrDefault(cfg.DeviceName, "(not set)"))
 	fmt.Fprintf(os.Stdout, "%-34s %s\n", "runtime_name:", valueOrDefault(cfg.RuntimeName, "(not set)"))
+	fmt.Fprintf(os.Stdout, "%-34s %s\n", "workspaces_root:", valueOrDefault(cfg.WorkspacesRoot, "(not set)"))
 	fmt.Fprintf(os.Stdout, "%-34s %s\n", "max_concurrent_tasks:", intOrDefault(cfg.MaxConcurrentTasks, "(not set)"))
 	fmt.Fprintf(os.Stdout, "%-34s %s\n", "poll_interval:", valueOrDefault(cfg.PollInterval, "(not set)"))
+	fmt.Fprintf(os.Stdout, "%-34s %s\n", "ws_claim_poll_interval:", valueOrDefault(cfg.WSClaimPollInterval, "(not set)"))
 	fmt.Fprintf(os.Stdout, "%-34s %s\n", "heartbeat_interval:", valueOrDefault(cfg.HeartbeatInterval, "(not set)"))
 	fmt.Fprintf(os.Stdout, "%-34s %s\n", "agent_timeout:", agentTimeoutDisplay(cfg.AgentTimeout))
 	fmt.Fprintf(os.Stdout, "%-34s %s\n", "codex_semantic_inactivity_timeout:", valueOrDefault(cfg.CodexSemanticInactivityTimeout, "(not set)"))
@@ -132,7 +136,11 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "Set %s = %s\n", key, value)
+	storedValue := value
+	if key == "workspaces_root" {
+		storedValue = cfg.WorkspacesRoot
+	}
+	fmt.Fprintf(os.Stderr, "Set %s = %s\n", key, storedValue)
 	return nil
 }
 
@@ -175,6 +183,17 @@ func applyConfigSet(cfg *cli.CLIConfig, key, value string) error {
 		cfg.DeviceName = value
 	case "runtime_name":
 		cfg.RuntimeName = value
+	case "workspaces_root":
+		value = strings.TrimSpace(value)
+		if value == "" {
+			cfg.WorkspacesRoot = ""
+			return nil
+		}
+		root, err := filepath.Abs(value)
+		if err != nil {
+			return fmt.Errorf("resolve workspaces_root: %w", err)
+		}
+		cfg.WorkspacesRoot = root
 	case "max_concurrent_tasks":
 		if value == "" {
 			cfg.MaxConcurrentTasks = 0
@@ -207,6 +226,10 @@ func applyConfigSet(cfg *cli.CLIConfig, key, value string) error {
 			return fmt.Errorf("poll_interval must be positive (got %s); use `config set poll_interval \"\"` to clear it", d)
 		}
 		cfg.PollInterval = value
+	case "ws_claim_poll_interval":
+		if err := assignPositiveDuration(&cfg.WSClaimPollInterval, key, value); err != nil {
+			return err
+		}
 	case "heartbeat_interval":
 		if err := assignPositiveDuration(&cfg.HeartbeatInterval, key, value); err != nil {
 			return err

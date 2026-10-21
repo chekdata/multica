@@ -126,9 +126,21 @@ func (s *LocalStorage) DeleteObject(_ context.Context, key string) error {
 	if key == "" {
 		return nil
 	}
-	filePath := filepath.Join(s.uploadDir, key)
-	for _, p := range []string{filePath, filePath + metaSuffix, tempPath(filePath)} {
-		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+	if !filepath.IsLocal(key) || filepath.Clean(key) == "." {
+		return fmt.Errorf("local DeleteObject: invalid key %q", key)
+	}
+	// Root also prevents a symlink in a key's parent directories from
+	// redirecting deletion outside the upload directory.
+	root, err := os.OpenRoot(s.uploadDir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	for _, p := range []string{key, key + metaSuffix, tempPath(key)} {
+		if err := root.Remove(p); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}

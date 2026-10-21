@@ -1,4 +1,9 @@
 import type { RuntimeDevice, RuntimeModel } from "../types";
+import {
+  AGENT_CONVERSATION_STARTER_LABEL_MAX_LENGTH,
+  AGENT_CONVERSATION_STARTER_MAX_LENGTH,
+  AGENT_CONVERSATION_STARTERS_MAX,
+} from "./constants";
 import type { AgentDraft } from "./draft";
 
 /**
@@ -22,30 +27,50 @@ export interface BuilderDraftPayload {
   name?: unknown;
   description?: unknown;
   instructions?: unknown;
+  conversation_starters?: unknown;
   model?: unknown;
   skill_ids?: unknown;
   permission_scope?: unknown;
   member_ids?: unknown;
 }
 
-export function parseBuilderDraft(content: string): BuilderDraftPayload | null {
-  const match = content.match(/<agent_draft>([\s\S]*?)<\/agent_draft>/);
-  if (!match?.[1]) return null;
+function isBuilderDraftPayload(value: unknown): value is BuilderDraftPayload {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function parseBuilderDraft(
+  content: string,
+  { completed = false }: { completed?: boolean } = {},
+): BuilderDraftPayload | null {
+  const start = content.indexOf("<agent_draft>");
+  const payloadStart = start + "<agent_draft>".length;
+  const end = start < 0 ? -1 : content.indexOf("</agent_draft>", payloadStart);
+  const payload = end < 0 ? "" : content.slice(payloadStart, end);
+  if (!payload) {
+    // Completed CLI replies can omit the closing tag and include literal
+    // string control characters. Apply the same repair as closed blocks,
+    // but never recover a live stream or truncate trailing text.
+    if (!completed || content.includes("</agent_draft>")) return null;
+    const parts = content.split("<agent_draft>");
+    if (parts.length !== 2 || !parts[1]) return null;
+    try {
+      const value = JSON.parse(escapeJsonStringControlCharacters(parts[1]));
+      return isBuilderDraftPayload(value) ? value : null;
+    } catch {
+      return null;
+    }
+  }
   try {
-    const value = JSON.parse(match[1]);
-    return value && typeof value === "object"
-      ? (value as BuilderDraftPayload)
-      : null;
+    const value = JSON.parse(payload);
+    return isBuilderDraftPayload(value) ? value : null;
   } catch {
     // Some CLI-backed models emit literal newlines in the Markdown
     // instructions string even when asked for compact JSON. Repair only JSON
     // control characters that occur inside strings; object structure and all
     // other syntax still have to pass JSON.parse.
     try {
-      const value = JSON.parse(escapeJsonStringControlCharacters(match[1]));
-      return value && typeof value === "object"
-        ? (value as BuilderDraftPayload)
-        : null;
+      const value = JSON.parse(escapeJsonStringControlCharacters(payload));
+      return isBuilderDraftPayload(value) ? value : null;
     } catch {
       return null;
     }
@@ -97,20 +122,24 @@ function escapeJsonStringControlCharacters(value: string): string {
  * is machinery — it drives the configuration form — and the form is where its
  * effect is already visible, so the transcript keeps only the prose.
  *
- * Two patterns, not one. The closed form is what history holds. The unclosed
- * one is what streaming produces: the reply arrives token by token, so for the
- * seconds it takes to emit the JSON there is an opening tag and no closing tag,
- * which the closed-form pattern cannot match — the raw payload used to scroll
- * past the reader on every single turn.
- *
- * The leading `\s*` takes the whitespace the model left between its prose and
- * the block, so removing it does not strand a blank line.
+ * An unclosed block is a streaming draft and hides the rest of the reply.
+ * Scan delimiters once so repeated opening tags cannot cause regex backtracking.
  */
 export function stripBuilderDraft(content: string): string {
-  return content
-    .replace(/\s*<agent_draft>[\s\S]*?<\/agent_draft>/g, "")
-    .replace(/\s*<agent_draft>[\s\S]*$/, "")
-    .trim();
+  const parts: string[] = [];
+  let cursor = 0;
+  while (true) {
+    const start = content.indexOf("<agent_draft>", cursor);
+    if (start < 0) {
+      parts.push(content.slice(cursor));
+      break;
+    }
+    parts.push(content.slice(cursor, start).trimEnd());
+    const end = content.indexOf("</agent_draft>", start + "<agent_draft>".length);
+    if (end < 0) break;
+    cursor = end + "</agent_draft>".length;
+  }
+  return parts.join("").trim();
 }
 
 export function encodeBuilderInput(
@@ -130,6 +159,7 @@ export function encodeBuilderInput(
           name: draft.name,
           description: draft.description,
           instructions: draft.instructions,
+          conversation_starters: draft.conversationStarters,
           model: draft.model,
           skill_ids: [...draft.skillIds],
           permission_scope: draft.permissionScope,
@@ -244,6 +274,28 @@ export function mergeBuilderDraft(
       ? payload.model
       : current.model;
 
+  const conversationStarters = Array.isArray(payload.conversation_starters)
+    ? payload.conversation_starters
+        .slice(0, AGENT_CONVERSATION_STARTERS_MAX)
+        .filter(
+          (item): item is { label: string; prompt: string } =>
+            !!item &&
+            typeof item === "object" &&
+            typeof (item as { label?: unknown }).label === "string" &&
+            typeof (item as { prompt?: unknown }).prompt === "string" &&
+            (item as { label: string }).label.trim().length > 0 &&
+            (item as { prompt: string }).prompt.trim().length > 0,
+        )
+        .map((item) => ({
+          label: [...item.label.trim()]
+            .slice(0, AGENT_CONVERSATION_STARTER_LABEL_MAX_LENGTH)
+            .join(""),
+          prompt: [...item.prompt.trim()]
+            .slice(0, AGENT_CONVERSATION_STARTER_MAX_LENGTH)
+            .join(""),
+        }))
+    : current.conversationStarters;
+
   return {
     ...current,
     name: typeof payload.name === "string" ? payload.name : current.name,
@@ -255,6 +307,7 @@ export function mergeBuilderDraft(
       typeof payload.instructions === "string"
         ? payload.instructions
         : current.instructions,
+    conversationStarters,
     model,
     // The builder can move the model, which invalidates whatever thinking /
     // speed the user picked for the previous one. It never sets these two

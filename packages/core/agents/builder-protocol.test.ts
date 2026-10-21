@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 import { describe, expect, it } from "vitest";
 import {
   decodeBuilderInput,
@@ -13,6 +15,7 @@ const draft = (): AgentDraft => ({
   name: "Old name",
   description: "Old description",
   instructions: "Old instructions",
+  conversationStarters: [],
   avatarUrl: null,
   runtimeId: "runtime-1",
   model: "model-1",
@@ -25,6 +28,19 @@ const draft = (): AgentDraft => ({
 });
 
 describe("agent builder protocol", () => {
+  it.each([
+    "[]",
+    '[{"name":"Reviewer"}]',
+    '[{"instructions":"First line\nSecond line"}]',
+  ])("rejects array payloads: %j", (payload) => {
+    expect(
+      parseBuilderDraft(`<agent_draft>${payload}</agent_draft>`),
+    ).toBeNull();
+    expect(
+      parseBuilderDraft(`<agent_draft>${payload}`, { completed: true }),
+    ).toBeNull();
+  });
+
   it("parses and hides the structured draft block", () => {
     const content =
       'Here is a first draft.\n<agent_draft>{"name":"Researcher","permission_scope":"workspace"}</agent_draft>';
@@ -37,14 +53,33 @@ describe("agent builder protocol", () => {
     expect(parseBuilderDraft("<agent_draft>not json</agent_draft>")).toBeNull();
   });
 
+  it("accepts up to three complete conversation starters from the builder", () => {
+    const merged = mergeBuilderDraft(
+      draft(),
+      {
+        conversation_starters: [
+          { label: " Review a PR ", prompt: " Review the open PR. " },
+          { label: "", prompt: "Ignored" },
+        ],
+      },
+      new Set(),
+      new Set(),
+      new Set(["model-1"]),
+    );
+
+    expect(merged.conversationStarters).toEqual([
+      { label: "Review a PR", prompt: "Review the open PR." },
+    ]);
+  });
+
   // Streaming delivers the reply token by token, so for the seconds it takes to
   // emit the JSON there is an opening tag and no closing one. The closed-form
   // pattern cannot match that, and the raw payload scrolled past the user on
   // every turn.
   it("hides a block that is still being streamed", () => {
-    expect(
-      stripBuilderDraft('Here you go.\n<agent_draft>{"name":"Rel'),
-    ).toBe("Here you go.");
+    expect(stripBuilderDraft('Here you go.\n<agent_draft>{"name":"Rel')).toBe(
+      "Here you go.",
+    );
   });
 
   it("repairs literal line breaks emitted inside the instructions string", () => {
@@ -56,14 +91,19 @@ Return findings."}</agent_draft>`;
 
     expect(parseBuilderDraft(content)).toEqual({
       name: "Reviewer",
-      instructions: "# Role\nReview every change.\n\n# Output\nReturn findings.",
+      instructions:
+        "# Role\nReview every change.\n\n# Output\nReturn findings.",
     });
   });
 
   it("round-trips only the user's natural-language request for chat display", () => {
+    const currentDraft = draft();
+    currentDraft.conversationStarters = [
+      { label: "Plan a release", prompt: "Plan the next release." },
+    ];
     const content = encodeBuilderInput(
       "Create a release manager",
-      draft(),
+      currentDraft,
       [],
       [],
       { id: "runtime-1", name: "Codex", provider: "codex" },
@@ -80,6 +120,11 @@ Return findings."}</agent_draft>`;
       available_runtime_models: [
         { id: "gpt-5.5", label: "GPT-5.5", provider: "openai" },
       ],
+      current_draft: {
+        conversation_starters: [
+          { label: "Plan a release", prompt: "Plan the next release." },
+        ],
+      },
     });
     expect(decodeBuilderInput("ordinary chat message")).toBe(
       "ordinary chat message",
@@ -101,10 +146,12 @@ Return findings."}</agent_draft>`;
       [],
     );
 
-    expect(pickBuilderRestore(null, { id: "msg-1", content: encoded })).toEqual({
-      id: "msg-1",
-      content: "Create a release manager",
-    });
+    expect(pickBuilderRestore(null, { id: "msg-1", content: encoded })).toEqual(
+      {
+        id: "msg-1",
+        content: "Create a release manager",
+      },
+    );
     expect(pickBuilderRestore(null, null)).toBeNull();
   });
 
@@ -193,8 +240,13 @@ Return findings."}</agent_draft>`;
       ).model,
     ).toBe("model-1");
     expect(
-      mergeBuilderDraft(draft(), { model: "model-1" }, new Set(), new Set(), null)
-        .model,
+      mergeBuilderDraft(
+        draft(),
+        { model: "model-1" },
+        new Set(),
+        new Set(),
+        null,
+      ).model,
     ).toBe("model-1");
     expect(
       mergeBuilderDraft(
@@ -255,4 +307,59 @@ Return findings."}</agent_draft>`;
       serviceTier: "",
     });
   });
+});
+
+describe("completed builder reply recovery", () => {
+  const reply = 'Here is your draft.\n<agent_draft>{"name":"Poet","instructions":"# Role\\nWrite poetry."}';
+
+  it("recovers a complete JSON object only after the reply completes", () => {
+    expect(parseBuilderDraft(reply)).toBeNull();
+    expect(parseBuilderDraft(reply, { completed: false })).toBeNull();
+    expect(parseBuilderDraft(reply, { completed: true })).toEqual({
+      name: "Poet",
+      instructions: "# Role\nWrite poetry.",
+    });
+  });
+
+  it("recovers an unclosed completed draft with literal string control characters", () => {
+    const content = '<agent_draft>{"name":"诗仙李白","instructions":"第一行\n\n## 交流方式\r\n- 以第一人称对话。\t保持诗意。","permission_scope":"private"}';
+    expect(parseBuilderDraft(content)).toBeNull();
+    expect(parseBuilderDraft(content, { completed: false })).toBeNull();
+    expect(parseBuilderDraft(content, { completed: true })).toEqual({
+      name: "诗仙李白",
+      instructions: "第一行\n\n## 交流方式\r\n- 以第一人称对话。\t保持诗意。",
+      permission_scope: "private",
+    });
+  });
+
+  it.each([
+    '<agent_draft>{"name":"Poet"',
+    '<agent_draft>{"instructions":"line one\nline two"',
+    '<agent_draft>{"instructions":"line one\nline two"} trailing prose',
+    '<agent_draft>{"name":"Poet",}',
+    '<agent_draft>{"name":"Poet"} trailing prose',
+    '<agent_draft>{"name":"Poet"}<agent_draft>{"name":"Other"}',
+    '<agent_draft>[]',
+    '<agent_draft>',
+    '<agent_draft></agent_draft>',
+    '<agent_draft>{"name":"Poet"}</agent_draft',
+    '<agent_draft>null',
+    '<agent_draft>"Poet"',
+    '{"name":"Poet"}',
+  ])("rejects malformed or ambiguous completed drafts: %s", (content) => {
+    expect(parseBuilderDraft(content, { completed: true })).toBeNull();
+  });
+
+  it("preserves closed-block parsing and literal-newline repair", () => {
+    expect(parseBuilderDraft('<agent_draft>{"instructions":"line one\nline two"}</agent_draft>'))
+      .toEqual({ instructions: "line one\nline two" });
+    expect(parseBuilderDraft(`${reply}</agent_draft>`, { completed: true }))
+      .toEqual(parseBuilderDraft(`${reply}</agent_draft>`));
+  });
+});
+
+it("handles repeated incomplete draft delimiters", () => {
+  const content = "Intro " + "<agent_draft>".repeat(20000);
+  expect(parseBuilderDraft(content)).toBeNull();
+  expect(stripBuilderDraft(content)).toBe("Intro");
 });

@@ -110,9 +110,12 @@ func TestCompleteTask_AlreadyFinalized(t *testing.T) {
 				Bus:     events.New(),
 			}
 
-			got, err := svc.CompleteTask(context.Background(), taskID, nil, "", "", false, "")
+			got, transitioned, err := svc.CompleteTaskWithTransition(context.Background(), taskID, nil, "", "", "", false, "", "")
 			if err != nil {
 				t.Fatalf("expected no error, got %v", err)
+			}
+			if transitioned {
+				t.Fatal("already-finalized task reported a new completion transition")
 			}
 			if got == nil {
 				t.Fatal("expected task, got nil")
@@ -152,9 +155,12 @@ func TestFailTask_AlreadyFinalized(t *testing.T) {
 				Bus:     events.New(),
 			}
 
-			got, err := svc.FailTask(context.Background(), taskID, "agent crashed", "", "", "", false, "")
+			got, transitioned, err := svc.FailTaskWithTransition(context.Background(), taskID, "agent crashed", "", "", "", "", false, "", "")
 			if err != nil {
 				t.Fatalf("expected no error, got %v", err)
+			}
+			if transitioned {
+				t.Fatal("already-finalized task reported a new failure transition")
 			}
 			if got == nil {
 				t.Fatal("expected task, got nil")
@@ -203,7 +209,8 @@ func TestProviderTransientRetrySchedule(t *testing.T) {
 		want          time.Duration
 	}{
 		{provNet, 1, 0}, // first failure → immediate retry
-		{provNet, 2, providerNetworkFinalRetryWait},  // second failure → 5s-deferred retry
+		{provNet, 2, providerNetworkFinalRetryWait}, // second failure → 5s-deferred retry
+		{"runtime_offline", 1, runtimeOfflineRetryDeferral},
 		{provCapacity, 1, providerCapacityRetryWait}, // capacity failure → bounded cooldown
 		{"timeout", 2, 0}, // unrelated reason → never deferred
 	}
@@ -281,6 +288,50 @@ func TestTaskFailureClassifiers(t *testing.T) {
 				t.Fatalf("retryableReasons[%q] = %v, want %v", tc.reason, got, tc.wantRetry)
 			}
 		})
+	}
+}
+
+// TestRuntimeCLITimeoutIsNotAutoRetried pins the retry posture for #7112. A
+// local runtime CLI that missed its preparation deadline is not transient: the
+// same host runs the same CLI on the next attempt and takes the same 8-11s to
+// fail again, so every retry is pure cost with a guaranteed outcome. That is
+// the difference from agent_error.provider_network, which the old text-based
+// classification lumped it in with — and which IS on the allowlist.
+//
+// Resume stays safe: the agent process never started, so the session the retry
+// (or the user's next message) resumes is untouched.
+func TestRuntimeCLITimeoutIsNotAutoRetried(t *testing.T) {
+	const reason = "runtime_cli_timeout"
+
+	if retryableReasons[reason] {
+		t.Errorf("retryableReasons[%q] = true, want false: the stall is local and deterministic", reason)
+	}
+	if resumeUnsafeFailureReason(reason) {
+		t.Errorf("resumeUnsafeFailureReason(%q) = true, want false: the agent never started", reason)
+	}
+	if !retryableReasons["agent_error.provider_network"] {
+		t.Error("agent_error.provider_network must stay retryable: real provider stalls are transient")
+	}
+}
+
+// TestEnvironmentPrepareFailureIsNotAutoRetried pins the retry posture for
+// #7913. The reason moved out of agent_error.* purely so the label is honest —
+// it must not quietly buy the failure a retry it never had. Its causes are the
+// host's: a full volume, a denied permission, a directory another process
+// holds. None of them changes because Multica asked a second time, and
+// preparation already waits out the one transient case it knows about (a prior
+// run still holding the directory) before it fails.
+//
+// Resume stays safe: the agent process never started, so the session the user's
+// next message resumes is untouched.
+func TestEnvironmentPrepareFailureIsNotAutoRetried(t *testing.T) {
+	const reason = "environment_prepare_failed"
+
+	if retryableReasons[reason] {
+		t.Errorf("retryableReasons[%q] = true, want false: the disk or permission problem is the same on the next attempt", reason)
+	}
+	if resumeUnsafeFailureReason(reason) {
+		t.Errorf("resumeUnsafeFailureReason(%q) = true, want false: the agent never started", reason)
 	}
 }
 
