@@ -420,6 +420,32 @@ func (q *Queries) HasAgentCommentedSince(ctx context.Context, arg HasAgentCommen
 	return commented, err
 }
 
+const hasAgentOutputCommentForTask = `-- name: HasAgentOutputCommentForTask :one
+SELECT EXISTS (
+    SELECT 1
+    FROM comment c
+    JOIN agent_task_queue t ON t.id = c.source_task_id
+    WHERE t.id = $1
+      AND t.issue_id IS NOT NULL
+      AND c.issue_id = t.issue_id
+      AND c.author_type = 'agent'
+      AND c.author_id = t.agent_id
+      AND c.type = 'comment'
+) AS delivered
+`
+
+// A source-linked agent comment is durable proof that this run already
+// delivered user-visible output. Failure reconciliation uses it to avoid
+// duplicate retries and a misleading issue rollback after late task failure.
+// Match the task's own issue/agent lineage and exclude generated system
+// failure messages, which also carry source_task_id but are not agent output.
+func (q *Queries) HasAgentOutputCommentForTask(ctx context.Context, sourceTaskID pgtype.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, hasAgentOutputCommentForTask, sourceTaskID)
+	var delivered bool
+	err := row.Scan(&delivered)
+	return delivered, err
+}
+
 const hasAgentRepliedInThread = `-- name: HasAgentRepliedInThread :one
 SELECT count(*) > 0 AS has_replied FROM comment
 WHERE parent_id = $1 AND author_type = 'agent' AND author_id = $2

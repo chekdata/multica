@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Check, Copy, ExternalLink, KeyRound, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
+import { Check, Copy, ExternalLink, KeyRound, Plus, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
 import { api } from "@multica/core/api";
 import type {
   CompanyCodexKeyStatus,
@@ -20,6 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@multica/ui/components/ui/dialog";
+import { Input } from "@multica/ui/components/ui/input";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { toast } from "sonner";
@@ -37,6 +38,9 @@ export function CompanyCodexSection() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [revoking, setRevoking] = useState(false);
+  const [quotaOpen, setQuotaOpen] = useState(false);
+  const [quotaIncrease, setQuotaIncrease] = useState("5000000");
+  const [increasingQuota, setIncreasingQuota] = useState(false);
   const [issued, setIssued] = useState<CreateCompanyCodexKeyResponse | null>(null);
   const [copied, setCopied] = useState<CopiedField>(null);
   const [sessionDetail, setSessionDetail] = useState<CompanyCodexSessionDetail | null>(null);
@@ -88,6 +92,25 @@ export function CompanyCodexSection() {
     }
   };
 
+  const additionalTokens = Number(quotaIncrease);
+  const quotaIncreaseValid = Number.isSafeInteger(additionalTokens) && additionalTokens > 0;
+
+  const increaseQuota = async () => {
+    if (!quotaIncreaseValid) return;
+    setIncreasingQuota(true);
+    try {
+      const result = await api.increaseCompanyCodexQuota(additionalTokens);
+      setKeyStatus(result);
+      setQuotaOpen(false);
+      setQuotaIncrease("5000000");
+      toast.success(t(($) => $.company_codex.quota_increased));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t(($) => $.company_codex.quota_increase_failed));
+    } finally {
+      setIncreasingQuota(false);
+    }
+  };
+
   const copy = async (field: Exclude<CopiedField, null>, value: string) => {
     if (await copyText(value)) {
       setCopied(field);
@@ -133,17 +156,50 @@ export function CompanyCodexSection() {
                   </Badge>
                 </div>
                 {keyStatus?.active ? (
-                  <p className="mt-1 text-caption text-muted-foreground">
-                    {t(($) => $.company_codex.key_metadata, {
-                      prefix: keyStatus.key_prefix ?? "",
-                      date: keyStatus.created_at
-                        ? new Date(keyStatus.created_at).toLocaleDateString()
-                        : "",
-                    })}
-                  </p>
+                  <div className="mt-1 space-y-1 text-caption text-muted-foreground">
+                    <p>
+                      {t(($) => $.company_codex.key_metadata, {
+                        prefix: keyStatus.key_prefix ?? "",
+                        date: keyStatus.created_at
+                          ? new Date(keyStatus.created_at).toLocaleDateString()
+                          : "",
+                      })}
+                    </p>
+                    {keyStatus.weekly_token_limit ? (
+                      <p>
+                        {t(($) => $.company_codex.quota_summary, {
+                          used: (keyStatus.current_tokens ?? 0).toLocaleString(),
+                          limit: keyStatus.weekly_token_limit.toLocaleString(),
+                        })}
+                        {keyStatus.reset_at
+                          ? ` · ${t(($) => $.company_codex.quota_resets, {
+                            date: new Date(keyStatus.reset_at).toLocaleString(),
+                          })}`
+                          : ""}
+                      </p>
+                    ) : (
+                      <p>{t(($) => $.company_codex.quota_unavailable)}</p>
+                    )}
+                    {keyStatus.upstream_remaining_percent !== null &&
+                    keyStatus.upstream_remaining_percent !== undefined ? (
+                      <p>{t(($) => $.company_codex.upstream_remaining, {
+                        percent: keyStatus.upstream_remaining_percent.toLocaleString(),
+                      })}</p>
+                    ) : null}
+                  </div>
                 ) : null}
               </div>
-              <div className="flex shrink-0 gap-2">
+              <div className="flex shrink-0 flex-wrap gap-2">
+                {keyStatus?.active ? (
+                  <Button
+                    variant="outline"
+                    onClick={() => setQuotaOpen(true)}
+                    disabled={!keyStatus.weekly_token_limit}
+                  >
+                    <Plus className="h-4 w-4" />
+                    {t(($) => $.company_codex.increase_quota)}
+                  </Button>
+                ) : null}
                 {keyStatus?.active ? (
                   <Button variant="outline" onClick={revokeKey} disabled={revoking}>
                     <Trash2 className="h-4 w-4" />
@@ -204,6 +260,55 @@ export function CompanyCodexSection() {
           </div>
         )}
       </SettingsSection>
+
+      <Dialog open={quotaOpen} onOpenChange={setQuotaOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{t(($) => $.company_codex.increase_quota_title)}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label htmlFor="company-codex-quota-increase" className="text-caption font-medium">
+                {t(($) => $.company_codex.additional_tokens)}
+              </label>
+              <Input
+                id="company-codex-quota-increase"
+                type="number"
+                min={1}
+                step={10000}
+                value={quotaIncrease}
+                onChange={(event) => setQuotaIncrease(event.target.value)}
+              />
+              <p className="text-caption text-muted-foreground">
+                {quotaIncreaseValid
+                  ? t(($) => $.company_codex.quota_preview, {
+                    current: (keyStatus?.weekly_token_limit ?? 0).toLocaleString(),
+                    additional: additionalTokens.toLocaleString(),
+                    next: ((keyStatus?.weekly_token_limit ?? 0) + additionalTokens).toLocaleString(),
+                  })
+                  : t(($) => $.company_codex.quota_invalid)}
+              </p>
+            </div>
+            <Alert>
+              <ShieldCheck />
+              <AlertDescription>{t(($) => $.company_codex.quota_warning)}</AlertDescription>
+            </Alert>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setQuotaOpen(false)}>
+              {t(($) => $.company_codex.quota_cancel)}
+            </Button>
+            <Button onClick={() => void increaseQuota()} disabled={!quotaIncreaseValid || increasingQuota}>
+              {increasingQuota ? (
+                <RefreshCw className="h-4 w-4 animate-spin" />
+              ) : (
+                <Plus className="h-4 w-4" />
+              )}
+              {t(($) => $.company_codex.confirm_increase)}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!issued} onOpenChange={(open) => { if (!open) setIssued(null); }}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] min-w-0 overflow-x-hidden overflow-y-auto sm:max-w-2xl">

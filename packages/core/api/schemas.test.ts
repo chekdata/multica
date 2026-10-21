@@ -81,6 +81,24 @@ describe("company Codex schemas", () => {
     expect(CreateCompanyCodexKeyResponseSchema.safeParse({ active: true }).success).toBe(false);
   });
 
+  it("keeps valid company Codex quota fields and rejects invalid percentages", () => {
+    expect(CompanyCodexKeyStatusSchema.parse({
+      active: true,
+      weekly_token_limit: 25_000_000,
+      current_tokens: 5_000_000,
+      reset_at: "2026-08-28T00:00:00Z",
+      upstream_remaining_percent: 74.25,
+    })).toMatchObject({
+      weekly_token_limit: 25_000_000,
+      current_tokens: 5_000_000,
+      upstream_remaining_percent: 74.25,
+    });
+    expect(CompanyCodexKeyStatusSchema.safeParse({
+      active: true,
+      upstream_remaining_percent: 101,
+    }).success).toBe(false);
+  });
+
   it("keeps future status values and rejects malformed session list items", () => {
     expect(CompanyCodexSessionListSchema.parse([{ ...session, status: "archived" }])[0]?.status)
       .toBe("archived");

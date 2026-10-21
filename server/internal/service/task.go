@@ -4598,9 +4598,11 @@ func (s *TaskService) enqueueRerunTask(ctx context.Context, issue db.Issue, agen
 
 // HandleFailedTasks runs the post-failure side effects for a batch of
 // freshly-failed tasks: optional auto-retry, task:failed event broadcast,
-// agent status reconciliation, and (when an issue has no remaining active
-// task and isn't being retried) resetting the issue back to todo so the
-// daemon can pick it up again.
+// agent status reconciliation, and issue status recovery. An in_progress
+// issue normally resets to todo when no task remains. If the failed task
+// already wrote a source-linked agent output comment, it instead advances to
+// in_review and is never auto-retried: the run failure stays truthful without
+// duplicating delivered work or hiding the handoff from reviewers.
 //
 // All callers that surface a task as failed — sweepers, FailTask,
 // recover-orphans — funnel through here so the same UI-consistency
@@ -4613,18 +4615,49 @@ func (s *TaskService) HandleFailedTasks(ctx context.Context, tasks []db.AgentTas
 	affectedAgents := make(map[string]pgtype.UUID)
 	processedIssues := make(map[string]bool)
 	retriedIssues := make(map[string]bool)
+	issuesWithDeliveredOutput := make(map[string]bool)
+	tasksWithDeliveredOutput := make(map[string]bool)
 	retried := 0
+
+	// Gather delivery evidence before deciding retries or issue status. Do this
+	// for the whole batch so iteration order cannot let one failed task reset an
+	// issue to todo when another task in the same batch already delivered output.
+	for _, t := range tasks {
+		if !t.IssueID.Valid {
+			continue
+		}
+		delivered, err := s.Queries.HasAgentOutputCommentForTask(ctx, t.ID)
+		if err != nil {
+			slog.Warn("handle failed tasks: delivered output check failed",
+				"task_id", util.UUIDToString(t.ID),
+				"issue_id", util.UUIDToString(t.IssueID),
+				"error", err,
+			)
+			continue
+		}
+		if delivered {
+			tasksWithDeliveredOutput[util.UUIDToString(t.ID)] = true
+			issuesWithDeliveredOutput[util.UUIDToString(t.IssueID)] = true
+		}
+	}
 
 	for _, t := range tasks {
 		// Auto-retry first so the issue stays in_progress rather than
 		// flapping todo → in_progress within a tick.
 		retryPending := false
-		if child, _ := s.MaybeRetryFailedTask(ctx, t); child != nil {
-			retryPending = true
-			retried++
-			if t.IssueID.Valid {
-				retriedIssues[util.UUIDToString(t.IssueID)] = true
+		if !tasksWithDeliveredOutput[util.UUIDToString(t.ID)] {
+			if child, _ := s.MaybeRetryFailedTask(ctx, t); child != nil {
+				retryPending = true
+				retried++
+				if t.IssueID.Valid {
+					retriedIssues[util.UUIDToString(t.IssueID)] = true
+				}
 			}
+		} else {
+			slog.Info("task auto-retry skipped: agent output already delivered",
+				"task_id", util.UUIDToString(t.ID),
+				"issue_id", util.UUIDToString(t.IssueID),
+			)
 		}
 
 		failureReason := "agent_error"
@@ -4649,9 +4682,13 @@ func (s *TaskService) HandleFailedTasks(ctx context.Context, tasks []db.AgentTas
 							"error", checkErr,
 						)
 					} else if !hasActive {
+						nextStatus := "todo"
+						if issuesWithDeliveredOutput[issueKey] {
+							nextStatus = "in_review"
+						}
 						updatedIssue, updateErr := s.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
 							ID:          t.IssueID,
-							Status:      "todo",
+							Status:      nextStatus,
 							WorkspaceID: issue.WorkspaceID,
 						})
 						if updateErr != nil {

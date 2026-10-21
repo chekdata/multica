@@ -70,6 +70,10 @@ export const CompanyCodexKeyStatusSchema = z.object({
   active: z.boolean().default(false),
   key_prefix: z.string().optional(),
   created_at: z.string().optional(),
+  weekly_token_limit: z.number().nonnegative().optional(),
+  current_tokens: z.number().nonnegative().optional(),
+  reset_at: z.string().optional(),
+  upstream_remaining_percent: z.number().min(0).max(100).nullable().optional(),
 }).loose();
 
 export const EMPTY_COMPANY_CODEX_KEY_STATUS: CompanyCodexKeyStatus = {

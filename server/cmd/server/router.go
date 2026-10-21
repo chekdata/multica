@@ -1334,6 +1334,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Use(handler.RequireHumanActor)
 				r.Get("/key", h.GetCompanyCodexKey)
 				r.Post("/key", h.CreateCompanyCodexKey)
+				r.Patch("/key", h.IncreaseCompanyCodexKeyQuota)
 				r.Delete("/key", h.RevokeCompanyCodexKey)
 				r.Get("/sessions", h.ListCompanyCodexSessions)
 				r.Get("/sessions/{id}", h.GetCompanyCodexSession)

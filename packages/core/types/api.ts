@@ -518,6 +518,10 @@ export interface CompanyCodexKeyStatus {
   active: boolean;
   key_prefix?: string;
   created_at?: string;
+  weekly_token_limit?: number;
+  current_tokens?: number;
+  reset_at?: string;
+  upstream_remaining_percent?: number | null;
 }
 
 export interface CreateCompanyCodexKeyResponse extends CompanyCodexKeyStatus {

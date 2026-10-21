@@ -2363,6 +2363,16 @@ export class ApiClient {
     return created;
   }
 
+  async increaseCompanyCodexQuota(additionalTokens: number): Promise<CompanyCodexKeyStatus> {
+    const raw = await this.fetch<unknown>("/api/company-codex/key", {
+      method: "PATCH",
+      body: JSON.stringify({ additional_tokens: additionalTokens }),
+    });
+    return parseWithFallback(raw, CompanyCodexKeyStatusSchema, EMPTY_COMPANY_CODEX_KEY_STATUS, {
+      endpoint: "PATCH /api/company-codex/key",
+    });
+  }
+
   async revokeCompanyCodexKey(): Promise<void> {
     await this.fetch("/api/company-codex/key", { method: "DELETE" });
   }

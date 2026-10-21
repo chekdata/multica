@@ -19,17 +19,34 @@ import (
 )
 
 const companyCodexBodyLimit = 2 << 20
+const companyCodexMaxSafeInteger = int64(9007199254740991)
 
 type companyCodexKeyStatus struct {
-	Active    bool   `json:"active"`
-	KeyPrefix string `json:"key_prefix,omitempty"`
-	CreatedAt string `json:"created_at,omitempty"`
+	Active                   bool     `json:"active"`
+	KeyPrefix                string   `json:"key_prefix,omitempty"`
+	CreatedAt                string   `json:"created_at,omitempty"`
+	WeeklyTokenLimit         int64    `json:"weekly_token_limit,omitempty"`
+	CurrentTokens            int64    `json:"current_tokens,omitempty"`
+	ResetAt                  string   `json:"reset_at,omitempty"`
+	UpstreamRemainingPercent *float64 `json:"upstream_remaining_percent,omitempty"`
 }
 
 type companyCodexBrokerCreateResponse struct {
 	GatewayKeyID     string `json:"gateway_key_id"`
 	GatewayKeyPrefix string `json:"gateway_key_prefix"`
+	WeeklyTokenLimit int64  `json:"weekly_token_limit"`
 	Credential       string `json:"credential"`
+}
+
+type companyCodexQuotaResponse struct {
+	WeeklyTokenLimit         int64    `json:"weekly_token_limit"`
+	CurrentTokens            int64    `json:"current_tokens"`
+	ResetAt                  string   `json:"reset_at"`
+	UpstreamRemainingPercent *float64 `json:"upstream_remaining_percent"`
+}
+
+type companyCodexQuotaIncreaseRequest struct {
+	AdditionalTokens int64 `json:"additional_tokens"`
 }
 
 type companyCodexCreateResponse struct {
@@ -190,13 +207,13 @@ func (h *Handler) GetCompanyCodexKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	workspaceID := ctxWorkspaceID(r.Context())
-	var prefix string
+	var gatewayKeyID, prefix string
 	var createdAt time.Time
 	err := h.DB.QueryRow(r.Context(), `
-		SELECT gateway_key_prefix, created_at
+		SELECT gateway_key_id, gateway_key_prefix, created_at
 		FROM company_codex_key
 		WHERE workspace_id = $1 AND user_id = $2 AND status = 'active'
-	`, workspaceID, userID).Scan(&prefix, &createdAt)
+	`, workspaceID, userID).Scan(&gatewayKeyID, &prefix, &createdAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeJSON(w, http.StatusOK, companyCodexKeyStatus{Active: false})
 		return
@@ -205,11 +222,22 @@ func (h *Handler) GetCompanyCodexKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load company Codex access")
 		return
 	}
-	writeJSON(w, http.StatusOK, companyCodexKeyStatus{
+	status := companyCodexKeyStatus{
 		Active:    true,
 		KeyPrefix: prefix,
 		CreatedAt: createdAt.UTC().Format(time.RFC3339),
-	})
+	}
+	var quota companyCodexQuotaResponse
+	if err := h.companyCodexBrokerRequest(r.Context(), http.MethodGet,
+		"/internal/company-codex/keys/"+url.PathEscape(gatewayKeyID), nil, &quota); err != nil {
+		slog.Warn("company Codex quota lookup failed", "error", err, "gateway_key_id", gatewayKeyID)
+	} else {
+		status.WeeklyTokenLimit = quota.WeeklyTokenLimit
+		status.CurrentTokens = quota.CurrentTokens
+		status.ResetAt = quota.ResetAt
+		status.UpstreamRemainingPercent = quota.UpstreamRemainingPercent
+	}
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (h *Handler) CreateCompanyCodexKey(w http.ResponseWriter, r *http.Request) {
@@ -307,14 +335,73 @@ requires_openai_auth = true
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusCreated, companyCodexCreateResponse{
 		companyCodexKeyStatus: companyCodexKeyStatus{
-			Active:    true,
-			KeyPrefix: created.GatewayKeyPrefix,
-			CreatedAt: storedCreatedAt.UTC().Format(time.RFC3339),
+			Active:           true,
+			KeyPrefix:        created.GatewayKeyPrefix,
+			CreatedAt:        storedCreatedAt.UTC().Format(time.RFC3339),
+			WeeklyTokenLimit: created.WeeklyTokenLimit,
 		},
 		Credential:   created.Credential,
 		CCSwitchURL:  deepLink.String(),
 		ConfigTOML:   configTOML,
 		SetupCommand: "poolctl gui configure",
+	})
+}
+
+func (h *Handler) IncreaseCompanyCodexKeyQuota(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := ctxWorkspaceID(r.Context())
+	var requested companyCodexQuotaIncreaseRequest
+	if !decodeCompanyCodexJSON(w, r, &requested) {
+		return
+	}
+	if requested.AdditionalTokens <= 0 || requested.AdditionalTokens > companyCodexMaxSafeInteger {
+		writeError(w, http.StatusBadRequest, "additional_tokens must be a positive safe integer")
+		return
+	}
+
+	var gatewayKeyID, prefix string
+	var createdAt time.Time
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT gateway_key_id, gateway_key_prefix, created_at
+		FROM company_codex_key
+		WHERE workspace_id = $1 AND user_id = $2 AND status = 'active'
+	`, workspaceID, userID).Scan(&gatewayKeyID, &prefix, &createdAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "active company Codex access required")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load company Codex access")
+		return
+	}
+
+	var quota companyCodexQuotaResponse
+	err = h.companyCodexBrokerRequest(r.Context(), http.MethodPatch,
+		"/internal/company-codex/keys/"+url.PathEscape(gatewayKeyID), map[string]any{
+			"workspace_id":      workspaceID,
+			"user_id":           userID,
+			"additional_tokens": requested.AdditionalTokens,
+		}, &quota)
+	if err != nil {
+		slog.Warn("company Codex quota increase failed", "error", err, "gateway_key_id", gatewayKeyID)
+		writeError(w, http.StatusBadGateway, "company Codex quota is temporarily unavailable")
+		return
+	}
+	slog.Info("company Codex quota increased",
+		"gateway_key_id", gatewayKeyID,
+		"weekly_token_limit", quota.WeeklyTokenLimit,
+	)
+	writeJSON(w, http.StatusOK, companyCodexKeyStatus{
+		Active:                   true,
+		KeyPrefix:                prefix,
+		CreatedAt:                createdAt.UTC().Format(time.RFC3339),
+		WeeklyTokenLimit:         quota.WeeklyTokenLimit,
+		CurrentTokens:            quota.CurrentTokens,
+		ResetAt:                  quota.ResetAt,
+		UpstreamRemainingPercent: quota.UpstreamRemainingPercent,
 	})
 }
 
